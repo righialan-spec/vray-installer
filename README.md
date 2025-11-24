@@ -1,33 +1,46 @@
-# 🚀 Xray Installer (XHTTP + TLS + 443)
+<h1 align="center">Xray Universal Installer (XHTTP + TLS + 443)</h1>
 
-Instalador automático do **Xray-core** configurado com:
-
-- 🟦 **XHTTP**  
-- 🔐 **TLS (porta 443 externa)**  
-- 🔌 **Inbound interno na porta 1080**  
-- 🎯 **UUID automático ou manual**  
-- 🌐 **Domínio configurado durante a instalação**  
-- 📡 **SNI fixo: `www.tim.com.br`**  
-- 🔗 **Geração automática do link VLESS ao final**
-
-Ideal para uso com plataformas como **Azion** ou CDNs que trabalham com proxying em 443.
+<p align="center">
+Instalador universal para Xray (XHTTP + TLS), compatível com qualquer VPS, incluindo Oracle Cloud.
+</p>
 
 ---
 
-## ✔️ Recursos do Instalador
+## 📌 Sobre este instalador
 
-- Instala Xray-core via repositório oficial  
-- Solicita automaticamente certificado SSL válido com **ACME**  
-- Aplica configuração completa (vless + xhttp)  
-- Configura logs e permissões  
-- Gera e exibe o link **VLESS** pronto para uso  
-- 100% automatizado — não precisa editar nada manualmente
+Este script instala automaticamente:
+
+- Xray-core (com 3 métodos de fallback: instalador oficial, jsDelivr e release direto).
+- ACME.sh (método standalone) para gerar certificado SSL automaticamente.
+- Certificados armazenados em:  
+  `/opt/sshorizon/ssl/privkey.pem`  
+  `/opt/sshorizon/ssl/fullchain.pem`
+- Configuração completa do Xray com:
+  - **Inbound interno 1080** (dokodemo)
+  - **VLESS externo 443** com XHTTP + TLS
+  - SNI fixo: **www.tim.com.br**
+- Criação de service systemd (`xray.service`)
+- Abertura automática das portas 80 e 443
+- Geração do link VLESS no final da instalação
+
+O script funciona em qualquer VPS, inclusive Oracle, mesmo quando `curl | bash` não funciona.
 
 ---
 
-## 📥 Como instalar (comando único)
+## ⚠️ Requisitos antes de instalar
 
-Execute:
+1. Seu domínio **deve apontar para o IP da VPS** (A record).
+2. A porta **80 deve estar aberta** temporariamente (ACME precisa dela).
+3. Executar como **root**.
+
+---
+
+## 🚀 Instalação
+
+### 🔥 Use o comando abaixo (via jsDelivr):
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install-xray.sh)
+sudo su
+curl -fsSL https://cdn.jsdelivr.net/gh/righialan-spec/vray-installer/install-xray.sh -o install-xray.sh
+chmod +x install-xray.sh
+./install-xray.sh
