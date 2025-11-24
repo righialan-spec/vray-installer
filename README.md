@@ -1,85 +1,37 @@
-<h1 align="center">🚀 Instalador Xray (TLS + XHTTP + 443)</h1>
+# 🚀 Xray Installer - VLESS XHTTP (CDN Optimized)
 
-<p align="center">
-  Script universal para instalar Xray com suporte a TLS + XHTTP usando
-  certificado autoassinado, ideal para uso com <strong>Azion</strong>, 
-  SNI fixo e porta externa 443.
-</p>
+![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?style=for-the-badge&logo=gnu-bash)
+![Xray](https://img.shields.io/badge/Core-Xray-blue?style=for-the-badge)
+![License](https://img.shields.io/badge/License-MIT-orange?style=for-the-badge)
 
-<hr>
+Script automatizado para instalação e configuração do **Xray Core** em servidores Linux (Ubuntu/Debian/CentOS). 
 
-<h2>📌 Características</h2>
+Este instalador foi **especificamente otimizado para CDNs como Azion e Cloudflare**, resolvendo problemas comuns de *Handshake SSL (Erro 502)* ao utilizar comunicação HTTP pura entre a CDN e a VPS, enquanto mantém a segurança HTTPS entre o cliente e a CDN.
 
-<ul>
-  <li>Pergunta apenas o <strong>subdomínio</strong> (ex: meuserver)</li>
-  <li>Monta automaticamente: <code>meuserver.azion.app</code></li>
-  <li>Instala o Xray (com vários fallbacks automáticos)</li>
-  <li>Gera certificado <strong>autoassinado</strong> válido por 10 anos</li>
-  <li>Gera UUID apenas após Xray estar instalado</li>
-  <li>Porta interna <strong>1080</strong> (dokodemo-door)</li>
-  <li>Porta externa <strong>443</strong> (VLESS + TLS + XHTTP)</li>
-  <li>SNI fixo: <strong>www.tim.com.br</strong></li>
-  <li>Gera o link VLESS no final</li>
-  <li>Compatível com qualquer VPS Linux</li>
-</ul>
+---
 
-<hr>
+## 📋 Funcionalidades
 
-<h2>⚙️ Como instalar (via jsDelivr)</h2>
+- ✅ **Instalação Automática:** Detecta o sistema operacional e instala dependências.
+- ✅ **Correção de Erro 502:** Configura o servidor na porta **80 (HTTP)** para evitar conflitos de certificado com a CDN.
+- ✅ **Firewall:** Libera portas automaticamente (iptables/netfilter-persistent).
+- ✅ **Protocolo Recente:** Configurado com **VLESS + XHTTP (SplitHTTP)** para alta performance.
+- ✅ **UUID Automático:** Gera e configura credenciais seguras.
+- ✅ **Serviço Systemd:** Configura o Xray para iniciar automaticamente com o sistema.
 
-<p>Execute os comandos abaixo como <strong>root</strong>:</p>
+---
 
-<pre><code>rm -f install-xray.sh
-curl -fsSL https://cdn.jsdelivr.net/gh/righialan-spec/vray-installer/install-xray.sh -o install-xray.sh
-chmod +x install-xray.sh
-sudo ./install-xray.sh
-</code></pre>
+## 🛠️ Pré-requisitos
 
-<hr>
+1. Um servidor VPS (Oracle Cloud, AWS, DigitalOcean, etc) com **Ubuntu 20+, Debian 10+ ou CentOS 8+**.
+2. Um domínio configurado em uma CDN (Azion ou Cloudflare).
+3. Acesso Root ao servidor.
 
-<h2>🔧 Processo de instalação</h2>
+---
 
-<p>O script irá:</p>
+## 🚀 Instalação Rápida
 
-<ol>
-  <li>Perguntar o subdomínio (ex: <code>meuserver</code>)</li>
-  <li>Gerar: <code>meuserver.azion.app</code></li>
-  <li>Instalar o Xray automaticamente</li>
-  <li>Gerar certificado autoassinado</li>
-  <li>Gerar UUID automaticamente</li>
-  <li>Criar <code>/usr/local/etc/xray/config.json</code> com sua configuração</li>
-  <li>Ativar e iniciar o serviço via systemd</li>
-  <li>Exibir o link VLESS final para importação</li>
-</ol>
+Acesse seu terminal como **root** e execute o comando abaixo:
 
-<hr>
-
-<h2>🔑 Exemplo de VLESS gerado</h2>
-
-<pre><code>vless://UUID@m.ofertas.tim.com.br:443?
-type=xhttp&security=tls&encryption=none
-&host=subdominio.azion.app
-&path=%2F
-&sni=www.tim.com.br
-&allowInsecure=1#Tim-BR
-</code></pre>
-
-<hr>
-
-<h2>📄 Logs</h2>
-
-<p>Para visualizar logs do Xray:</p>
-
-<pre><code>journalctl -u xray -n 200 --no-pager
-</code></pre>
-
-<hr>
-
-<h2>📬 Contato</h2>
-
-<p>Projeto mantido por <strong>righialan-spec</strong>.  
-Contribuições, sugestões e issues são bem-vindas.</p>
-
-<hr>
-
-<h3 align="center">✨ Feito com foco em simplicidade e compatibilidade total.</h3>
+```bash
+bash <(curl -sL [https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install.sh](https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install.sh))
