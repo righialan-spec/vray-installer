@@ -1,46 +1,85 @@
-<h1 align="center">Xray Universal Installer (XHTTP + TLS + 443)</h1>
+<h1 align="center">🚀 Instalador Xray (TLS + XHTTP + 443)</h1>
 
 <p align="center">
-Instalador universal para Xray (XHTTP + TLS), compatível com qualquer VPS, incluindo Oracle Cloud.
+  Script universal para instalar Xray com suporte a TLS + XHTTP usando
+  certificado autoassinado, ideal para uso com <strong>Azion</strong>, 
+  SNI fixo e porta externa 443.
 </p>
 
----
+<hr>
 
-## 📌 Sobre este instalador
+<h2>📌 Características</h2>
 
-Este script instala automaticamente:
+<ul>
+  <li>Pergunta apenas o <strong>subdomínio</strong> (ex: meuserver)</li>
+  <li>Monta automaticamente: <code>meuserver.azion.app</code></li>
+  <li>Instala o Xray (com vários fallbacks automáticos)</li>
+  <li>Gera certificado <strong>autoassinado</strong> válido por 10 anos</li>
+  <li>Gera UUID apenas após Xray estar instalado</li>
+  <li>Porta interna <strong>1080</strong> (dokodemo-door)</li>
+  <li>Porta externa <strong>443</strong> (VLESS + TLS + XHTTP)</li>
+  <li>SNI fixo: <strong>www.tim.com.br</strong></li>
+  <li>Gera o link VLESS no final</li>
+  <li>Compatível com qualquer VPS Linux</li>
+</ul>
 
-- Xray-core (com 3 métodos de fallback: instalador oficial, jsDelivr e release direto).
-- ACME.sh (método standalone) para gerar certificado SSL automaticamente.
-- Certificados armazenados em:  
-  `/opt/sshorizon/ssl/privkey.pem`  
-  `/opt/sshorizon/ssl/fullchain.pem`
-- Configuração completa do Xray com:
-  - **Inbound interno 1080** (dokodemo)
-  - **VLESS externo 443** com XHTTP + TLS
-  - SNI fixo: **www.tim.com.br**
-- Criação de service systemd (`xray.service`)
-- Abertura automática das portas 80 e 443
-- Geração do link VLESS no final da instalação
+<hr>
 
-O script funciona em qualquer VPS, inclusive Oracle, mesmo quando `curl | bash` não funciona.
+<h2>⚙️ Como instalar (via jsDelivr)</h2>
 
----
+<p>Execute os comandos abaixo como <strong>root</strong>:</p>
 
-## ⚠️ Requisitos antes de instalar
-
-1. Seu domínio **deve apontar para o IP da VPS** (A record).
-2. A porta **80 deve estar aberta** temporariamente (ACME precisa dela).
-3. Executar como **root**.
-
----
-
-## 🚀 Instalação
-
-### 🔥 Use o comando abaixo (via jsDelivr):
-
-```bash
-sudo su
+<pre><code>rm -f install-xray.sh
 curl -fsSL https://cdn.jsdelivr.net/gh/righialan-spec/vray-installer/install-xray.sh -o install-xray.sh
 chmod +x install-xray.sh
-./install-xray.sh
+sudo ./install-xray.sh
+</code></pre>
+
+<hr>
+
+<h2>🔧 Processo de instalação</h2>
+
+<p>O script irá:</p>
+
+<ol>
+  <li>Perguntar o subdomínio (ex: <code>meuserver</code>)</li>
+  <li>Gerar: <code>meuserver.azion.app</code></li>
+  <li>Instalar o Xray automaticamente</li>
+  <li>Gerar certificado autoassinado</li>
+  <li>Gerar UUID automaticamente</li>
+  <li>Criar <code>/usr/local/etc/xray/config.json</code> com sua configuração</li>
+  <li>Ativar e iniciar o serviço via systemd</li>
+  <li>Exibir o link VLESS final para importação</li>
+</ol>
+
+<hr>
+
+<h2>🔑 Exemplo de VLESS gerado</h2>
+
+<pre><code>vless://UUID@m.ofertas.tim.com.br:443?
+type=xhttp&security=tls&encryption=none
+&host=subdominio.azion.app
+&path=%2F
+&sni=www.tim.com.br
+&allowInsecure=1#Tim-BR
+</code></pre>
+
+<hr>
+
+<h2>📄 Logs</h2>
+
+<p>Para visualizar logs do Xray:</p>
+
+<pre><code>journalctl -u xray -n 200 --no-pager
+</code></pre>
+
+<hr>
+
+<h2>📬 Contato</h2>
+
+<p>Projeto mantido por <strong>righialan-spec</strong>.  
+Contribuições, sugestões e issues são bem-vindas.</p>
+
+<hr>
+
+<h3 align="center">✨ Feito com foco em simplicidade e compatibilidade total.</h3>
