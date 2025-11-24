@@ -34,4 +34,5 @@ Este instalador foi **especificamente otimizado para CDNs como Azion e Cloudflar
 Acesse seu terminal como **root** e execute o comando abaixo:
 
 ```bash
-bash <(curl -sL [https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install.sh](https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install.sh))
+
+bash <(curl -sL https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install.sh)
