@@ -2,27 +2,28 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# install-xray.sh — Instalador Universal (ACME standalone) Xray XHTTP+TLS
-# - Inbound internal: 1080 (dokodemo)
-# - External: 443 (vless xhttp tls)
+# install-xray-letsencrypt.sh
+# Universal installer: Xray (XHTTP + TLS) with Let's Encrypt (certbot)
+# - internal inbound: 1080 (dokodemo)
+# - external: 443 (vless + xhttp + tls)
 # - SNI fixed: www.tim.com.br
-# - UUID: auto (or manual)
-# Notes: requires domain DNS pointed to this VPS and port 80 reachable.
+# - UUID generated at the END
+# - Certificates: /etc/letsencrypt/live/<domain>/{fullchain.pem,privkey.pem}
 
-# ---------- Helpers ----------
-info(){ echo -e "\e[34m[INFO]\e[0m $*"; }
-ok(){ echo -e "\e[32m[OK]\e[0m $*"; }
-warn(){ echo -e "\e[33m[WARN]\e[0m $*"; }
-err(){ echo -e "\e[31m[ERR]\e[0m $*"; exit 1; }
+info(){ printf "\e[34m[INFO]\e[0m %s\n" "$*"; }
+ok(){ printf "\e[32m[ OK ]\e[0m %s\n" "$*"; }
+warn(){ printf "\e[33m[WARN]\e[0m %s\n" "$*"; }
+err(){ printf "\e[31m[ERR]\e[0m %s\n" "$*"; exit 1; }
 
-require_cmd(){
-  command -v "$1" >/dev/null 2>&1 || err "Comando '$1' não encontrado. Instale-o e rode de novo."
+require_root(){
+  if [ "$EUID" -ne 0 ]; then
+    err "Execute como root: sudo ./install-xray-letsencrypt.sh"
+  fi
 }
 
-# ---------- Detect distro ----------
 detect_pkgmgr(){
   if command -v apt-get >/dev/null 2>&1; then
-    PKG_INSTALL="apt-get install -y"
+    PKG_INSTALL="apt-get install -y --no-install-recommends"
     UPDATE_CMD="apt-get update -y"
   elif command -v dnf >/dev/null 2>&1; then
     PKG_INSTALL="dnf install -y"
@@ -31,58 +32,51 @@ detect_pkgmgr(){
     PKG_INSTALL="yum install -y"
     UPDATE_CMD="yum makecache"
   else
-    err "Nenhum gerenciador de pacotes compatível encontrado (apt/yum/dnf)."
+    err "Nenhum gerenciador de pacotes compatível encontrado (apt/dnf/yum)."
   fi
 }
 
-# ---------- Basic deps ----------
 install_basic_deps(){
-  info "Instalando dependências básicas (curl, socat, unzip, jq se precisar)..."
+  info "Instalando dependências básicas..."
   ${UPDATE_CMD}
-  $PKG_INSTALL curl socat unzip wget ca-certificates openssl
-  # jq optional (not required unless future features)
-  command -v jq >/dev/null 2>&1 || $PKG_INSTALL jq || true
-  ok "Dependências instaladas."
+  $PKG_INSTALL curl wget unzip ca-certificates socat openssl lsb-release || true
+  ok "Dependências básicas instaladas (ou já estavam presentes)."
 }
 
-# ---------- Xray install (3 fallbacks) ----------
+# Xray install fallbacks (official -> jsdelivr -> release)
 install_xray_official(){
-  info "Tentando instalar Xray (script oficial)..."
-  # prefer download to file and execute to avoid process substitution issues
-  local tmp="/tmp/xray_install_official.sh"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmp" "https://github.com/XTLS/Xray-install/raw/main/install-release.sh"; then
-    chmod +x "$tmp"
-    bash "$tmp" || return 1
-    return 0
+  info "Tentando instalar Xray via script oficial..."
+  tmpf="/tmp/xray_install_official.sh"
+  if curl -A "Mozilla/5.0" -fsSL -o "$tmpf" "https://github.com/XTLS/Xray-install/raw/main/install-release.sh"; then
+    chmod +x "$tmpf"
+    bash "$tmpf" && return 0 || return 1
   fi
   return 1
 }
 
 install_xray_jsdelivr(){
   info "Tentando instalar Xray via jsDelivr..."
-  local tmp="/tmp/xray_install_jsdelivr.sh"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmp" "https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh"; then
-    chmod +x "$tmp"
-    bash "$tmp" || return 1
-    return 0
+  tmpf="/tmp/xray_install_jsdelivr.sh"
+  if curl -A "Mozilla/5.0" -fsSL -o "$tmpf" "https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh"; then
+    chmod +x "$tmpf"
+    bash "$tmpf" && return 0 || return 1
   fi
   return 1
 }
 
 install_xray_release(){
-  info "Tentando instalar Xray baixando release (fallback)..."
-  ARCH="linux-64"
-  # try known asset name: Xray-linux-64.zip (works for many releases)
-  local tmpzip="/tmp/xray_core.zip"
-  local url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
+  info "Tentando baixar release oficial do Xray (fallback)..."
+  tmpzip="/tmp/xray_core.zip"
+  url="https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"
   if curl -A "Mozilla/5.0" -fsSL -o "$tmpzip" "$url"; then
-    unzip -o "$tmpzip" -d /tmp/xray_core_unpack
-    # expected binaries inside: xray or Xray; find it
-    if [ -f /tmp/xray_core_unpack/xray ] || [ -f /tmp/xray_core_unpack/Xray ]; then
-      local bin=""
-      if [ -f /tmp/xray_core_unpack/xray ]; then bin="/tmp/xray_core_unpack/xray"; fi
-      if [ -f /tmp/xray_core_unpack/Xray ]; then bin="/tmp/xray_core_unpack/Xray"; fi
-      install -m 755 "$bin" /usr/local/bin/xray
+    unzip -o "$tmpzip" -d /tmp/xray_core_unpack >/dev/null 2>&1 || true
+    if [ -f /tmp/xray_core_unpack/xray ]; then
+      install -m 755 /tmp/xray_core_unpack/xray /usr/local/bin/xray
+      ok "Xray instalado em /usr/local/bin/xray"
+      return 0
+    fi
+    if [ -f /tmp/xray_core_unpack/Xray ]; then
+      install -m 755 /tmp/xray_core_unpack/Xray /usr/local/bin/xray
       ok "Xray instalado em /usr/local/bin/xray"
       return 0
     fi
@@ -94,51 +88,104 @@ install_xray_universal(){
   detect_pkgmgr
   install_basic_deps
   if install_xray_official; then ok "Xray instalado (oficial)"; return 0; fi
-  warn "Instalador oficial falhou, tentando jsDelivr..."
+  warn "Instalador oficial falhou. Tentando jsDelivr..."
   if install_xray_jsdelivr; then ok "Xray instalado (jsDelivr)"; return 0; fi
-  warn "jsDelivr falhou, tentando baixar release..."
+  warn "jsDelivr falhou. Tentando baixar release..."
   if install_xray_release; then ok "Xray instalado (release)"; return 0; fi
   err "Falha ao instalar Xray por todos os métodos."
 }
 
-# ---------- ACME.sh install and issue (standalone) ----------
-install_acme_sh(){
-  info "Instalando acme.sh..."
-  # use official installer
-  if curl -fsSL "https://get.acme.sh" -o /tmp/acme_install.sh; then
-    bash /tmp/acme_install.sh --auto-upgrade >/dev/null 2>&1 || true
-  else
-    err "Falha ao baixar acme.sh"
+# Try to install certbot (apt or snap)
+install_certbot(){
+  info "Tentando instalar certbot..."
+  if command -v certbot >/dev/null 2>&1; then
+    ok "certbot já instalado"
+    return 0
   fi
-  # source acme
-  if [ -f "$HOME/.acme.sh/acme.sh.env" ]; then
-    # shellcheck disable=SC1090
-    source "$HOME/.acme.sh/acme.sh.env"
+
+  if command -v apt-get >/dev/null 2>&1; then
+    ${UPDATE_CMD}
+    # prefer snap on modern systems, but try apt first
+    if apt-get install -y certbot >/dev/null 2>&1; then
+      ok "certbot instalado via apt"
+      return 0
+    fi
+    # try snap if available
+    if command -v snap >/dev/null 2>&1; then
+      info "Tentando instalar certbot via snap..."
+      snap install core >/dev/null 2>&1 || true
+      snap refresh core >/dev/null 2>&1 || true
+      snap install --classic certbot >/dev/null 2>&1 || true
+      ln -sf /snap/bin/certbot /usr/bin/certbot || true
+      if command -v certbot >/dev/null 2>&1; then
+        ok "certbot instalado via snap"
+        return 0
+      fi
+    fi
   fi
-  ok "acme.sh instalado."
+
+  # fallback: try pip installer? (rare)
+  if command -v pip3 >/dev/null 2>&1; then
+    pip3 install certbot >/dev/null 2>&1 || true
+    if command -v certbot >/dev/null 2>&1; then
+      ok "certbot instalado via pip"
+      return 0
+    fi
+  fi
+
+  warn "Não foi possível instalar certbot automaticamente. Você pode instalar manualmente e rodar o script novamente."
+  return 1
 }
 
-issue_cert_standalone(){
+# Stop common web servers on port 80 to allow standalone challenge, then restore if needed
+stop_web_services_if_any(){
+  # collect services to restart later
+  RESTORE_SERVICES=()
+  for svc in nginx apache2 httpd; do
+    if systemctl is-active --quiet "$svc" >/dev/null 2>&1; then
+      warn "Parando temporariamente o serviço $svc (para ACME standalone)..."
+      systemctl stop "$svc" || true
+      RESTORE_SERVICES+=("$svc")
+    fi
+  done
+}
+
+restore_web_services(){
+  for svc in "${RESTORE_SERVICES[@]:-}"; do
+    warn "Reiniciando $svc..."
+    systemctl start "$svc" || true
+  done
+}
+
+issue_cert_certbot_standalone(){
   local domain="$1"
-  info "Emitindo certificado ACME (standalone) para: $domain"
-  mkdir -p "$SSL_DIR"
-  # stop any service listening on 80 temporarily? we warn user instead
-  # issue
-  if ! "$HOME/.acme.sh"/acme.sh --issue -d "$domain" --standalone --force; then
-    err "Falha ao emitir certificado ACME. Verifique DNS e se a porta 80 está apontando para esta VPS."
+  info "Emitindo certificado Let's Encrypt para: $domain (standalone)"
+  # ensure port 80 free: stop services
+  stop_web_services_if_any
+
+  # try certbot standalone
+  if ! certbot certonly --non-interactive --agree-tos --standalone -m "admin@${domain}" -d "${domain}"; then
+    restore_web_services
+    err "certbot falhou ao emitir certificado. Verifique DNS apontando para esta VPS e se a porta 80 está acessível."
   fi
-  "$HOME/.acme.sh"/acme.sh --install-cert -d "$domain" \
-    --key-file "$SSL_DIR/privkey.pem" \
-    --fullchain-file "$SSL_DIR/fullchain.pem" \
-    --reloadcmd "systemctl restart xray" >/dev/null 2>&1 || true
-  chmod 600 "$SSL_DIR/privkey.pem" || true
-  chmod 644 "$SSL_DIR/fullchain.pem" || true
-  ok "Certificado instalado em $SSL_DIR"
+
+  # certificate paths
+  SSL_DIR="/etc/letsencrypt/live/${domain}"
+  if [ ! -f "${SSL_DIR}/fullchain.pem" ] || [ ! -f "${SSL_DIR}/privkey.pem" ]; then
+    restore_web_services
+    err "Certificados não encontrados após emissão em ${SSL_DIR}"
+  fi
+
+  # set perms
+  chmod 644 "${SSL_DIR}/fullchain.pem" || true
+  chmod 600 "${SSL_DIR}/privkey.pem" || true
+
+  ok "Certificado instalado em ${SSL_DIR}"
+  restore_web_services
 }
 
-# ---------- create systemd service ----------
 create_systemd_service(){
-  info "Criando service systemd para xray..."
+  info "Criando systemd service para xray..."
   cat > /etc/systemd/system/xray.service <<'EOF'
 [Unit]
 Description=Xray Service
@@ -160,14 +207,41 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable xray >/dev/null 2>&1 || true
-  ok "Service criado."
+  ok "Systemd service criado."
 }
 
-# ---------- create xray config ----------
+create_logs(){
+  mkdir -p /var/log/v2ray
+  touch /var/log/v2ray/access.log
+  chmod -R 755 /var/log/v2ray || true
+  ok "Diretórios de log prontos."
+}
+
+open_firewall(){
+  info "Tentando abrir portas 80 e 443 no firewall local (ufw/firewalld/iptables)..."
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow 80/tcp >/dev/null 2>&1 || true
+    ufw allow 443/tcp >/dev/null 2>&1 || true
+    ok "UFW atualizado."
+    return
+  fi
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port=80/tcp >/dev/null 2>&1 || true
+    firewall-cmd --permanent --add-port=443/tcp >/dev/null 2>&1 || true
+    firewall-cmd --reload >/dev/null 2>&1 || true
+    ok "firewalld atualizado."
+    return
+  fi
+  # fallback iptables
+  iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
+  iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
+  ok "Regras iptables adicionadas (temporárias)."
+}
+
 create_xray_config(){
   local uuid="$1"
   local domain="$2"
-
+  SSL_DIR="/etc/letsencrypt/live/${domain}"
   mkdir -p /usr/local/etc/xray
   cat > /usr/local/etc/xray/config.json <<EOF
 {
@@ -242,40 +316,9 @@ create_xray_config(){
   "stats": {}
 }
 EOF
-  ok "Config /usr/local/etc/xray/config.json criado."
+  ok "Arquivo de configuração criado."
 }
 
-# ---------- logs dir ----------
-create_logs(){
-  mkdir -p /var/log/v2ray
-  touch /var/log/v2ray/access.log
-  chmod -R 755 /var/log/v2ray
-  ok "Diretórios de log configurados."
-}
-
-# ---------- firewall open ----------
-open_firewall_ports(){
-  info "Tentando abrir portas 80 e 443 no firewall local (ufw/firewalld/iptables)..."
-  if command -v ufw >/dev/null 2>&1; then
-    ufw allow 80/tcp || true
-    ufw allow 443/tcp || true
-    ok "UFW atualizado."
-    return
-  fi
-  if command -v firewall-cmd >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port=80/tcp || true
-    firewall-cmd --permanent --add-port=443/tcp || true
-    firewall-cmd --reload || true
-    ok "firewalld atualizado."
-    return
-  fi
-  # fallback iptables
-  iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
-  iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
-  ok "Regras iptables adicionadas (temporárias)."
-}
-
-# ---------- check listen ----------
 check_listen_443(){
   sleep 1
   if ss -tulpn | grep -q ":443"; then
@@ -287,78 +330,62 @@ check_listen_443(){
   fi
 }
 
-# ---------- main ----------
 main(){
-  if [ "$EUID" -ne 0 ]; then
-    err "Execute como root: sudo ./install-xray.sh"
-  fi
+  require_root
 
-  # interactive prompts
   echo
+  echo "==============================================="
+  echo "       Instalador Xray (XHTTP + TLS + 443)"
+  echo "==============================================="
+  echo
+
   read -rp "Digite o domínio (host) que será usado no VLESS (ex: righi.azion.app): " DOMAIN
   DOMAIN="${DOMAIN:-}"
   if [ -z "$DOMAIN" ]; then err "Domínio obrigatório."; fi
 
-  read -rp "Gerar UUID automático? (S/n): " USE_AUTO
-  USE_AUTO="${USE_AUTO:-s}"
+  PKG_OK=0
+  detect_pkgmgr
+  install_basic_deps
 
-  # prepare dirs
-  SSL_DIR="/opt/sshorizon/ssl"
-  mkdir -p "$SSL_DIR"
-  chmod 755 /opt/sshorizon || true
-  chmod 755 "$SSL_DIR" || true
+  # open firewall ports so ACME can use 80
+  open_firewall
 
-  # install xray (universal)
+  # install xray
   install_xray_universal
 
-  # now we have xray binary (hopefully). Generate UUID via xray or fallback uuidgen
-  if command -v xray >/dev/null 2>&1; then
-    if [[ "$USE_AUTO" =~ ^(s|S|y|Y|)$ ]]; then
-      UUID="$(xray uuid 2>/dev/null || true)"
-    else
-      read -rp "Digite o UUID desejado: " UUID
-    fi
-  else
-    warn "xray não encontrado para gerar uuid; usando uuidgen se disponível."
-    if [[ "$USE_AUTO" =~ ^(s|S|y|Y|)$ ]]; then
-      if command -v uuidgen >/dev/null 2>&1; then
-        UUID="$(uuidgen)"
-      else
-        # fallback to random
-        UUID="$(cat /proc/sys/kernel/random/uuid)"
-      fi
-    else
-      read -rp "Digite o UUID desejado: " UUID
-    fi
-  fi
-
-  if [[ -z "$UUID" ]]; then err "UUID inválido."; fi
-  ok "UUID: $UUID"
-
+  # create logs & service skeleton (config will be created after cert + uuid)
   create_logs
   create_systemd_service
 
-  # install acme.sh and issue cert
-  install_acme_sh
+  # install certbot and request cert
+  if install_certbot; then
+    issue_cert_certbot_standalone "$DOMAIN"
+  else
+    err "Não foi possível instalar certbot automaticamente. Instale certbot manualmente e execute novamente."
+  fi
 
-  # open firewall ports for ACME challenge
-  open_firewall_ports
+  # generate UUID now that Xray binary should exist
+  if command -v xray >/dev/null 2>&1; then
+    UUID="$(xray uuid 2>/dev/null || true)"
+  fi
+  if [ -z "${UUID:-}" ]; then
+    if command -v uuidgen >/dev/null 2>&1; then
+      UUID="$(uuidgen)"
+    else
+      UUID="$(cat /proc/sys/kernel/random/uuid)"
+    fi
+  fi
+  ok "UUID gerado: $UUID"
 
-  issue_cert_standalone "$DOMAIN"
-
-  # ensure permissions
-  chown root:root "$SSL_DIR"/* || true
-  chmod 644 "$SSL_DIR"/fullchain.pem || true
-  chmod 600 "$SSL_DIR"/privkey.pem || true
-
-  # create config and start service
+  # create config with generated uuid and cert paths
   create_xray_config "$UUID" "$DOMAIN"
 
+  # start/restart service
   systemctl restart xray || true
   sleep 1
 
   if ! check_listen_443; then
-    warn "Xray não está escutando em 443. Verifique logs: journalctl -u xray -n 50"
+    warn "Xray pode não estar escutando em 443 — verifique logs (journalctl -u xray -n 200)"
   fi
 
   # final VLESS link
@@ -367,18 +394,18 @@ main(){
 
   echo
   echo "==============================================="
-  echo " INSTALAÇÃO FINALIZADA"
+  echo " INSTALAÇÃO CONCLUÍDA"
   echo "==============================================="
   echo "UUID: $UUID"
-  echo "Domínio (host): $DOMAIN"
+  echo "Domínio: $DOMAIN"
   echo
-  echo "Link VLESS gerado:"
+  echo "Link VLESS pronto:"
   echo
   echo "$VLESS"
   echo
-  echo "Se algo falhar, veja logs com: journalctl -u xray -n 200"
-  echo "==============================================="
+  echo "Se algo falhar, veja logs:"
+  echo "  journalctl -u xray -n 200 --no-pager"
+  echo
 }
 
-# run
 main
