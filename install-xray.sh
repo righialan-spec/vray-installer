@@ -80,7 +80,7 @@ cat > $CONFIG_PATH <<EOF
       "listen": "127.0.0.1"
     },
     {
-      "tag": "inbound-sshorizon",
+      "tag": "inbound-alan",
       "port": 443,
       "listen": "0.0.0.0",
       "protocol": "vless",
