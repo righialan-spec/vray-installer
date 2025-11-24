@@ -1,74 +1,101 @@
 #!/bin/bash
-# Xray Installer - Configuração XHTTP + TLS + Porta 443 + UUID dinâmico
-# Compatível com Linode + Azion
-
 clear
+
 echo "==============================================="
-echo "     Instalador Xray (XHTTP + TLS + 443)"
+echo "       Instalador Xray (XHTTP + TLS + 443)"
 echo "==============================================="
+
+# ------------------------------
+# 1. Ler domínio
+# ------------------------------
 echo
+read -rp "Digite o domínio (host): " DOMAIN
+
+if [ -z "$DOMAIN" ]; then
+    echo "[ERRO] Você precisa informar um domínio."
+    exit 1
+fi
+
+SNI="www.tim.com.br"
+XRAY_DIR="/usr/local/etc/xray"
+SSL_DIR="/opt/sshorizon/ssl"
 
 # ------------------------------
-# 1. Perguntar domínio
+# 2. Gerar ou receber UUID
 # ------------------------------
-read -rp "Digite o domínio (host/SNI) que deseja usar (ex: righi.azion.app): " DOMAIN
+echo
+read -rp "Gerar UUID automático? (S/n): " UUID_CHOICE
 
-if [[ -z "$DOMAIN" ]]; then
-    echo "[ERRO] Você deve informar um domínio válido."
+if [[ "$UUID_CHOICE" =~ ^(n|N)$ ]]; then
+    read -rp "Digite o UUID desejado: " USER_UUID
+else
+    USER_UUID=$(xray uuid)
+fi
+
+if [ -z "$USER_UUID" ]; then
+    echo "[ERRO] UUID inválido."
     exit 1
 fi
 
 # ------------------------------
-# 2. Verificar certificado
+# 3. Instalar dependências
 # ------------------------------
-CERT_DIR="/opt/sshorizon/ssl"
+apt update -y
+apt install -y curl socat cron unzip
 
-if [[ ! -f "$CERT_DIR/fullchain.pem" || ! -f "$CERT_DIR/privkey.pem" ]]; then
-    echo "[ERRO] Certificados não encontrados em:"
-    echo "$CERT_DIR/fullchain.pem"
-    echo "$CERT_DIR/privkey.pem"
-    echo
-    echo "Crie ou copie os arquivos antes de rodar o script."
+# ------------------------------
+# 4. Instalar acme.sh
+# ------------------------------
+if [ ! -d "~/.acme.sh" ]; then
+    curl https://get.acme.sh | sh
+fi
+
+# Carregar acme.sh
+source ~/.bashrc
+source ~/.acme.sh/acme.sh.env
+
+# ------------------------------
+# 5. Gerar certificado
+# ------------------------------
+echo
+echo "Gerando certificado SSL via ACME..."
+mkdir -p "$SSL_DIR"
+
+~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --force
+
+if [ $? -ne 0 ]; then
+    echo "[ERRO] Falha ao gerar certificado. Verifique DNS e porta 80."
     exit 1
 fi
 
-chmod 755 /opt/sshorizon
-chmod 755 /opt/sshorizon/ssl
-chmod 644 /opt/sshorizon/ssl/fullchain.pem
-chmod 600 /opt/sshorizon/ssl/privkey.pem
+~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" \
+    --key-file "$SSL_DIR/privkey.pem" \
+    --fullchain-file "$SSL_DIR/fullchain.pem" \
+    --reloadcmd "systemctl restart xray"
+
+chmod 600 "$SSL_DIR"/*.pem
 
 # ------------------------------
-# 3. Instalar Xray
+# 6. Instalar Xray
 # ------------------------------
-echo "[+] Instalando Xray..."
-bash <(curl -s https://raw.githubusercontent.com/XTLS/Xray-install/main/install-release.sh)
+echo
+echo "Instalando Xray..."
+
+bash <(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)
+
+mkdir -p "$XRAY_DIR"
 
 # ------------------------------
-# 4. Gerar UUID
+# 7. Criar config.json
 # ------------------------------
-UUID=$(xray uuid)
-echo "[+] UUID gerado: $UUID"
-
-# ------------------------------
-# 5. Criar config.json
-# ------------------------------
-CONFIG_PATH="/usr/local/etc/xray/config.json"
-
-cat > $CONFIG_PATH <<EOF
+cat > $XRAY_DIR/config.json <<EOF
 {
   "api": {
-    "services": [
-      "HandlerService",
-      "LoggerService",
-      "StatsService"
-    ],
+    "services": ["HandlerService", "LoggerService", "StatsService"],
     "tag": "api"
   },
   "dns": {
-    "servers": [
-      "94.140.14.14",
-      "94.140.15.15"
-    ],
+    "servers": ["94.140.14.14", "94.140.15.15"],
     "queryStrategy": "UseIPv4"
   },
   "inbounds": [
@@ -80,15 +107,14 @@ cat > $CONFIG_PATH <<EOF
       "listen": "127.0.0.1"
     },
     {
-      "tag": "inbound-alan",
+      "tag": "inbound-sshorizon",
       "port": 443,
-      "listen": "0.0.0.0",
       "protocol": "vless",
       "settings": {
         "clients": [
           {
-            "email": "user@installer.local",
-            "id": "$UUID",
+            "email": "client@$DOMAIN",
+            "id": "$USER_UUID",
             "level": 0
           }
         ],
@@ -101,8 +127,8 @@ cat > $CONFIG_PATH <<EOF
         "tlsSettings": {
           "certificates": [
             {
-              "certificateFile": "$CERT_DIR/fullchain.pem",
-              "keyFile": "$CERT_DIR/privkey.pem"
+              "certificateFile": "$SSL_DIR/fullchain.pem",
+              "keyFile": "$SSL_DIR/privkey.pem"
             }
           ],
           "alpn": ["http/1.1"]
@@ -125,7 +151,8 @@ cat > $CONFIG_PATH <<EOF
     "access": "/var/log/v2ray/access.log",
     "dnsLog": false,
     "error": "",
-    "loglevel": "info"
+    "loglevel": "info",
+    "maskAddress": ""
   },
   "outbounds": [
     { "protocol": "freedom", "tag": "direct" },
@@ -133,66 +160,64 @@ cat > $CONFIG_PATH <<EOF
   ],
   "policy": {
     "levels": {
-      "0": { "statsUserDownlink": true, "statsUserOnline": true, "statsUserUplink": true }
-    },
-    "system": {
-      "statsInboundDownlink": true,
-      "statsInboundUplink": true
+      "0": {
+        "statsUserDownlink": true,
+        "statsUserOnline": true,
+        "statsUserUplink": true
+      }
     }
   },
   "routing": {
     "domainStrategy": "AsIs",
     "rules": [
-      {
-        "protocol": ["bittorrent"],
-        "outboundTag": "blocked",
-        "type": "field"
-      }
+      { "inboundTag": ["api"], "outboundTag": "api", "type": "field" },
+      { "ip": ["geoip:private"], "outboundTag": "blocked", "type": "field" },
+      { "protocol": ["bittorrent"], "outboundTag": "blocked", "type": "field" }
     ]
-  }
+  },
+  "stats": {}
 }
 EOF
 
 # ------------------------------
-# 6. Criar service file corrigido
+# 8. Criar diretórios de log
 # ------------------------------
-cat > /etc/systemd/system/xray.service <<EOF
-[Unit]
-Description=Xray Service
-Documentation=https://github.com/xtls
-After=network.target nss-lookup.target
-
-[Service]
-User=root
-Group=root
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
-Restart=on-failure
-RestartSec=10
-LimitNOFILE=51200
-
-[Install]
-WantedBy=multi-user.target
-EOF
+mkdir -p /var/log/v2ray
+touch /var/log/v2ray/access.log
+chmod -R 755 /var/log/v2ray
 
 # ------------------------------
-# 7. Ativar serviço
+# 9. Reiniciar serviço
 # ------------------------------
-systemctl daemon-reload
 systemctl enable xray
 systemctl restart xray
 
+sleep 1
+
+# ------------------------------
+# 10. Testar funcionamento
+# ------------------------------
+if ! ss -tulpn | grep -q ":443"; then
+    echo
+    echo "[ERRO] Xray não abriu a porta 443!"
+    echo "Verifique firewall."
+    exit 1
+fi
+
+# ------------------------------
+# 11. Gerar link VLESS
+# ------------------------------
+VLESS="vless://$USER_UUID@m.ofertas.tim.com.br:443?type=xhttp&security=tls&encryption=none&host=$DOMAIN&path=%2F&sni=$SNI&allowInsecure=1#Tim-BR"
+
 echo
 echo "==============================================="
-echo "        INSTALAÇÃO FINALIZADA!"
+echo "              INSTALAÇÃO CONCLUÍDA"
 echo "==============================================="
 echo
-echo "[+] UUID: $UUID"
-echo "[+] Domínio configurado: $DOMAIN"
+echo "Seu link VLESS:"
 echo
-echo "=== Seu link VLESS ==="
+echo "$VLESS"
 echo
-echo "vless://$UUID@m.ofertas.tim.com.br:443?type=xhttp&security=tls&encryption=none&host=$DOMAIN&path=%2F&sni=www.tim.com.br&allowInsecure=1#Tim-BR"
-echo
+echo "==============================================="
+echo "Xray está rodando na porta 443 com XHTTP + TLS"
 echo "==============================================="
