@@ -1,35 +1,33 @@
-# Xray Installer (VLESS + TLS + XHTTP + Azion)
+# 🚀 Xray Installer (XHTTP + TLS + 443)
 
-Este script instala automaticamente um servidor Xray com:
+Instalador automático do **Xray-core** configurado com:
 
-- VLESS (TCP Reality / XHTTP)
-- TLS ativo (usando certificado já existente)
-- Porta interna 1080
-- Porta externa 443 (requer proxy como Azion, Cloudflare ou Nginx)
-- UUID gerado automaticamente
-- Host e SNI personalizados durante a instalação
-- Geração automática do link VLESS final
+- 🟦 **XHTTP**  
+- 🔐 **TLS (porta 443 externa)**  
+- 🔌 **Inbound interno na porta 1080**  
+- 🎯 **UUID automático ou manual**  
+- 🌐 **Domínio configurado durante a instalação**  
+- 📡 **SNI fixo: `www.tim.com.br`**  
+- 🔗 **Geração automática do link VLESS ao final**
 
----
-
-## 📌 Como funciona
-
-O instalador realiza:
-
-1. Instalação do Xray
-2. Criação do diretório `/opt/sshorizon/ssl/`
-3. Instalação dos certificados `fullchain.pem` e `privkey.pem`
-4. Criação da configuração `/usr/local/etc/xray/config.json`
-5. Geração automática do UUID
-6. Pergunta pelo domínio que será utilizado no link final
-7. Inicia o serviço Xray via systemd
-8. Exibe o link VLESS pronto no final
+Ideal para uso com plataformas como **Azion** ou CDNs que trabalham com proxying em 443.
 
 ---
 
-## 🔧 Instalação (comando único)
+## ✔️ Recursos do Instalador
 
-Na sua VPS:
+- Instala Xray-core via repositório oficial  
+- Solicita automaticamente certificado SSL válido com **ACME**  
+- Aplica configuração completa (vless + xhttp)  
+- Configura logs e permissões  
+- Gera e exibe o link **VLESS** pronto para uso  
+- 100% automatizado — não precisa editar nada manualmente
+
+---
+
+## 📥 Como instalar (comando único)
+
+Execute:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install-xray.sh)
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install-xray.sh)
