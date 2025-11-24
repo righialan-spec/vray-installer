@@ -2,31 +2,27 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# install-xray-local.sh
-# Instalador local universal (self-signed cert) para Xray (XHTTP + TLS)
-# - Pergunta subdomínio (ex: meuserver) e monta: meuserver.azion.app
-# - Gera certificado autoassinado em /opt/sshorizon/ssl/
-# - Instala Xray (com múltiplos fallbacks)
-# - Gera UUID APENAS APÓS o Xray estar instalado
-# - Cria config.json exatamente no formato solicitado
-# - Cria systemd service e inicia o Xray
-# - Gera link VLESS final com SNI fixo www.tim.com.br
+# Instalador universal Xray (TLS + XHTTP + autoassinado)
+# - Pergunta apenas o SUBDOMÍNIO (ex: meuserver)
+# - Monta domínio completo: meuserver.azion.app
+# - Instala Xray
+# - Gera UUID apenas após Xray estar instalado
+# - Gera certificado autoassinado
+# - Cria config.json no formato fornecido pelo usuário
+# - Cria systemd service
+# - Gera VLESS no final
 
-BREED="vray-installer-local"
-SNI_FIXED="www.tim.com.br"
 SSL_DIR="/opt/sshorizon/ssl"
-XRAY_BIN_PATH="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_CONFIG_PATH="${XRAY_CONFIG_DIR}/config.json"
+SNI_FIXED="www.tim.com.br"
 
-# Helper
-info(){ printf "\e[34m[INFO]\e[0m %s\n" "$*"; }
-ok(){ printf "\e[32m[OK]\e[0m %s\n" "$*"; }
-warn(){ printf "\e[33m[WARN]\e[0m %s\n" "$*"; }
-err(){ printf "\e[31m[ERR]\e[0m %s\n" "$*"; exit 1; }
+info(){ printf "\e[34m[INFO]\e[0m %s\n" "$*" ; }
+ok(){ printf "\e[32m[OK]\e[0m %s\n" "$*" ; }
+err(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" ; exit 1 ; }
 
 require_root(){
-  if [ "$EUID" -ne 0 ]; then
+  if [[ "$EUID" -ne 0 ]]; then
     err "Execute como root: sudo ./install-xray.sh"
   fi
 }
@@ -35,61 +31,53 @@ detect_pkgmgr(){
   if command -v apt-get >/dev/null 2>&1; then
     PKG_INST="apt-get install -y"
     UPDATE_CMD="apt-get update -y"
-  elif command -v dnf >/dev/null 2>&1; then
-    PKG_INST="dnf install -y"
-    UPDATE_CMD="dnf makecache"
   elif command -v yum >/dev/null 2>&1; then
     PKG_INST="yum install -y"
     UPDATE_CMD="yum makecache"
+  elif command -v dnf >/dev/null 2>&1; then
+    PKG_INST="dnf install -y"
+    UPDATE_CMD="dnf makecache"
   else
-    err "Nenhum gerenciador de pacotes compatível encontrado (apt/yum/dnf)."
+    err "Gerenciador de pacotes não suportado."
   fi
 }
 
-install_deps(){
-  info "Atualizando repositórios e instalando dependências (curl, wget, unzip, openssl)..."
+install_dependencies(){
+  info "Instalando dependências..."
   ${UPDATE_CMD}
-  $PKG_INST curl wget unzip ca-certificates openssl socat iptables || true
-  ok "Dependências instaladas (ou já presentes)."
+  ${PKG_INST} curl wget unzip openssl ca-certificates
+  ok "Dependências instaladas."
 }
 
-# Xray installers (three fallbacks)
+# --- Xray installation (3 fallbacks) ---
+
 install_xray_official(){
-  info "Tentando instalar Xray via instalador oficial..."
-  tmp="/tmp/xray_install_official.sh"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmp" "https://github.com/XTLS/Xray-install/raw/main/install-release.sh"; then
-    chmod +x "$tmp" || true
-    bash "$tmp" || return 1
+  info "Tentando Xray via instalador oficial..."
+  if curl -fsSL -o /tmp/xray.sh https://github.com/XTLS/Xray-install/raw/main/install-release.sh; then
+    bash /tmp/xray.sh || return 1
     return 0
   fi
   return 1
 }
 
 install_xray_jsdelivr(){
-  info "Tentando instalar Xray via jsDelivr..."
-  tmp="/tmp/xray_install_jsdelivr.sh"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmp" "https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh"; then
-    chmod +x "$tmp" || true
-    bash "$tmp" || return 1
+  info "Tentando Xray via jsDelivr..."
+  if curl -fsSL -o /tmp/xray.sh https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh; then
+    bash /tmp/xray.sh || return 1
     return 0
   fi
   return 1
 }
 
 install_xray_release(){
-  info "Tentando instalar Xray baixando release (fallback)..."
-  tmpzip="/tmp/xray_core.zip"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmpzip" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"; then
-    mkdir -p /tmp/xray_unpack
-    unzip -o "$tmpzip" -d /tmp/xray_unpack >/dev/null 2>&1 || true
-    # find binary
-    if [ -f /tmp/xray_unpack/xray ]; then
-      install -m 755 /tmp/xray_unpack/xray /usr/local/bin/xray
-      ok "Xray instalado em /usr/local/bin/xray"
-      return 0
-    elif [ -f /tmp/xray_unpack/Xray ]; then
-      install -m 755 /tmp/xray_unpack/Xray /usr/local/bin/xray
-      ok "Xray instalado em /usr/local/bin/xray"
+  info "Baixando release do Xray (fallback)..."
+  local ZIP="/tmp/xray.zip"
+  if curl -fsSL -o "$ZIP" https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip; then
+    mkdir -p /tmp/xray_unzip
+    unzip -o "$ZIP" -d /tmp/xray_unzip >/dev/null 2>&1
+    if [[ -f /tmp/xray_unzip/xray ]]; then
+      install -m 755 /tmp/xray_unzip/xray /usr/local/bin/xray
+      ok "Xray instalado via fallback."
       return 0
     fi
   fi
@@ -98,48 +86,58 @@ install_xray_release(){
 
 install_xray_universal(){
   detect_pkgmgr
-  install_deps
+  install_dependencies
+
   if command -v xray >/dev/null 2>&1; then
-    ok "xray já instalado"
-    return 0
+    ok "Xray já instalado."
+    return
   fi
-  if install_xray_official; then ok "Xray instalado (oficial)"; return 0; fi
-  warn "Instalador oficial falhou, tentando jsDelivr..."
-  if install_xray_jsdelivr; then ok "Xray instalado (jsDelivr)"; return 0; fi
-  warn "jsDelivr falhou, tentando baixar release..."
-  if install_xray_release; then ok "Xray instalado (release)"; return 0; fi
+
+  install_xray_official && return
+  install_xray_jsdelivr && return
+  install_xray_release && return
+
   err "Falha ao instalar Xray por todos os métodos."
 }
 
-# Create self-signed cert
+# --- SSL self-signed ---
+
 generate_self_signed_cert(){
   local domain="$1"
   mkdir -p "$SSL_DIR"
-  chmod 755 "$(dirname "$SSL_DIR")" || true
-  chmod 755 "$SSL_DIR" || true
-  key="$SSL_DIR/privkey.pem"
-  crt="$SSL_DIR/fullchain.pem"
-  info "Gerando certificado autoassinado para $domain (válido 10 anos)..."
+  info "Gerando certificado autoassinado ($domain)..."
+
   openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
-    -keyout "$key" -out "$crt" -subj "/CN=${domain}" >/dev/null 2>&1 || err "Falha ao gerar certificado."
-  chmod 600 "$key" || true
-  chmod 644 "$crt" || true
-  ok "Certificado autoassinado criado em $SSL_DIR"
+    -subj "/CN=$domain" \
+    -keyout "$SSL_DIR/privkey.pem" \
+    -out "$SSL_DIR/fullchain.pem" >/dev/null 2>&1
+
+  chmod 600 "$SSL_DIR/privkey.pem"
+  chmod 644 "$SSL_DIR/fullchain.pem"
+  ok "Certificado autoassinado pronto."
 }
 
+# --- Logs ---
+
+prepare_logs(){
+  mkdir -p /var/log/v2ray
+  touch /var/log/v2ray/access.log
+  chmod 755 /var/log/v2ray
+}
+
+# --- Systemd ---
+
 create_systemd_service(){
-  info "Criando systemd service para xray..."
-  cat > /etc/systemd/system/xray.service <<'EOF'
+  info "Criando serviço systemd..."
+
+  cat > /etc/systemd/system/xray.service <<EOF
 [Unit]
 Description=Xray Service
-Documentation=https://github.com/XTLS
 After=network.target nss-lookup.target
 
 [Service]
 User=root
 Group=root
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
 Restart=on-failure
 RestartSec=10
@@ -148,44 +146,19 @@ LimitNOFILE=51200
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload || true
-  systemctl enable xray >/dev/null 2>&1 || true
-  ok "Service systemd criado."
+
+  systemctl daemon-reload
+  systemctl enable xray
 }
 
-create_logs(){
-  mkdir -p /var/log/v2ray
-  touch /var/log/v2ray/access.log
-  chmod -R 755 /var/log/v2ray || true
-  ok "Diretórios de log ok."
-}
-
-open_local_firewall(){
-  info "Tentando liberar portas 80 e 443 no firewall local (ufw/firewalld/iptables)..."
-  if command -v ufw >/dev/null 2>&1; then
-    ufw allow 80/tcp || true
-    ufw allow 443/tcp || true
-    ufw reload || true
-    ok "UFW atualizado."
-    return
-  fi
-  if command -v firewall-cmd >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port=80/tcp || true
-    firewall-cmd --permanent --add-port=443/tcp || true
-    firewall-cmd --reload || true
-    ok "firewalld atualizado."
-    return
-  fi
-  # fallback iptables
-  iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
-  iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
-  ok "Regras iptables adicionadas (temporárias)."
-}
+# --- Config.json ---
 
 create_xray_config(){
   local uuid="$1"
   local domain="$2"
+
   mkdir -p "$XRAY_CONFIG_DIR"
+
   cat > "$XRAY_CONFIG_PATH" <<EOF
 {
   "api": {
@@ -223,7 +196,7 @@ create_xray_config(){
       "settings": {
         "clients": [
           {
-            "email": "righialan@${domain}",
+            "email": "admin@${domain}",
             "id": "${uuid}",
             "level": 0
           }
@@ -325,82 +298,51 @@ create_xray_config(){
   "transport": null
 }
 EOF
-  ok "Arquivo de configuração $XRAY_CONFIG_PATH criado."
+
+  ok "Configuração criada em $XRAY_CONFIG_PATH"
 }
 
-check_xray_running(){
-  sleep 1
-  if ss -tulpn | grep -q ":443"; then
-    ok "Xray está escutando em 443."
-    return 0
-  else
-    warn "Nenhum processo escutando em 443."
-    return 1
-  fi
-}
+# --- Main ---
 
-# ---------- main ----------
 main(){
   require_root
 
   echo "==============================================="
-  echo "       Instalador Xray (XHTTP + TLS + 443)"
+  echo "  Instalador Xray (TLS + XHTTP + 443)"
   echo "==============================================="
-  echo
 
   read -rp "Digite o subdomínio (ex: meuserver): " SUB
-  if [ -z "$SUB" ]; then err "Subdomínio obrigatório."; fi
+  [[ -z "$SUB" ]] && err "Subdomínio obrigatório."
+
   DOMAIN="${SUB}.azion.app"
-  info "Dominio a ser usado: $DOMAIN"
+  info "Domínio final: $DOMAIN"
 
-  detect_pkgmgr
-
-  # install xray first (universal)
   install_xray_universal
 
-  # now generate UUID (xray binary should exist now)
-  if command -v xray >/dev/null 2>&1; then
-    UUID="$(xray uuid 2>/dev/null || true)"
-  fi
-  # fallback
-  if [ -z "${UUID:-}" ]; then
-    if command -v uuidgen >/dev/null 2>&1; then
-      UUID="$(uuidgen)"
-    else
-      UUID="$(cat /proc/sys/kernel/random/uuid)"
-    fi
-  fi
-  if [ -z "${UUID:-}" ]; then err "Falha ao gerar UUID."; fi
+  # UUID AFTER Xray installation
+  UUID=$(xray uuid 2>/dev/null || uuidgen || cat /proc/sys/kernel/random/uuid)
+  [[ -z "$UUID" ]] && err "Falha ao gerar UUID."
+
   ok "UUID gerado: $UUID"
 
-  # generate self-signed certificate
   generate_self_signed_cert "$DOMAIN"
-
-  # create logs, service, config
-  create_logs
+  prepare_logs
   create_systemd_service
   create_xray_config "$UUID" "$DOMAIN"
-  open_local_firewall
 
-  # restart xray
-  info "Reiniciando xray..."
-  systemctl restart xray || true
-  sleep 2
+  systemctl restart xray
+  sleep 1
 
-  check_xray_running || warn "Verifique 'journalctl -u xray -n 200' para detalhes."
-
-  # final VLESS
   VLESS="vless://${UUID}@m.ofertas.tim.com.br:443?type=xhttp&security=tls&encryption=none&host=${DOMAIN}&path=%2F&sni=${SNI_FIXED}&allowInsecure=1#Tim-BR"
 
   echo
   echo "==============================================="
-  echo " INSTALAÇÃO FINALIZADA"
+  echo " INSTALAÇÃO CONCLUÍDA"
   echo "==============================================="
+  echo "Domínio: $DOMAIN"
   echo "UUID: $UUID"
-  echo "Domínio completo: $DOMAIN"
   echo
-  echo "Link VLESS pronto:"
-  echo
+  echo "VLESS:"
   echo "$VLESS"
   echo
   echo "Logs: journalctl -u xray -n 200 --no-pager"
