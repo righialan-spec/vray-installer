@@ -3,11 +3,11 @@ set -euo pipefail
 
 # install.sh
 # Instalador Xray para Azion/Cloudflare (Modo HTTP Porta 80)
-# - Corrige erro 502 (Deixa a CDN cuidar do SSL)
-# - Instala Xray
+# - Corrige erro de permissão de logs
+# - Sem bloqueios (Torrent liberado)
 # - Configura VLESS via XHTTP (Splithttp)
 
-BREED="vray-installer-http"
+BREED="vray-installer-http-v2"
 SNI_FIXED="www.tim.com.br"
 XRAY_BIN_PATH="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
@@ -62,11 +62,22 @@ install_xray_universal(){
   fi
 }
 
+fix_log_permissions(){
+  info "Ajustando permissões de log..."
+  mkdir -p /var/log/xray
+  touch /var/log/xray/access.log
+  touch /var/log/xray/error.log
+  # Libera permissão total para evitar erro de 'permission denied' independente do usuário do serviço
+  chmod -R 777 /var/log/xray
+  ok "Permissões de log corrigidas."
+}
+
 create_xray_config(){
   local uuid="$1"
   local domain="$2"
   mkdir -p "$XRAY_CONFIG_DIR"
   
+  # Configuração SEM bloqueios de routing e na porta 80
   cat > "$XRAY_CONFIG_PATH" <<EOF
 {
   "api": {
@@ -161,7 +172,9 @@ main(){
   # Gera UUID
   UUID="$(xray uuid)"
   
+  # Cria config e corrige permissões
   create_xray_config "$UUID" "$DOMAIN"
+  fix_log_permissions
   open_firewall
 
   info "Reiniciando serviço..."
@@ -171,7 +184,7 @@ main(){
   if systemctl is-active --quiet xray; then
     ok "Xray rodando!"
   else
-    err "Xray falhou ao iniciar. Verifique os logs."
+    err "Xray falhou ao iniciar. Logs abaixo:\n$(journalctl -u xray -n 20 --no-pager)"
   fi
 
   # Link final
