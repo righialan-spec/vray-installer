@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# A linha IFS foi removida para corrigir o erro de execução dos comandos com espaços
-
-# install-xray-local.sh
-# Instalador local universal (self-signed cert) para Xray (XHTTP + TLS)
 
 BREED="vray-installer-local"
 SNI_FIXED="www.tim.com.br"
@@ -296,20 +292,6 @@ create_xray_config(){
           "api"
         ],
         "outboundTag": "api",
-        "type": "field"
-      },
-      {
-        "ip": [
-          "geoip:private"
-        ],
-        "outboundTag": "blocked",
-        "type": "field"
-      },
-      {
-        "outboundTag": "blocked",
-        "protocol": [
-          "bittorrent"
-        ],
         "type": "field"
       }
     ]
