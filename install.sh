@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # ================================================
 # Xray VLESS + xHttp + TLS + Proxy TIM/Azion 2025
-# ================================================
-
-# --- CONFIGURAÇÃO DE SEGURANÇA DESATIVADA PARA EVITAR CRASH NO MENU ---
-# set -euo pipefail  <-- COMENTADO PROPOSITALMENTE
+# =========================================
+# set -euo pipefail  
 
 BREED="vray-installer-local"
 SNI_FIXED="www.tim.com.br"
