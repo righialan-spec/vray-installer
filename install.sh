@@ -234,7 +234,7 @@ create_base_config() {
   cat > "$XRAY_CONFIG_PATH" <<EOF
 {
   "api": { "services": [ "HandlerService", "LoggerService", "StatsService" ], "tag": "api" },
-  "dns": { "servers": [ "1.1.1.1", "8.8.8.8" ] },
+  "dns": { "servers": [ "94.140.14.14", "94.140.15.15" ] },
   "inbounds": [
     {
       "tag": "api", "port": 1080, "protocol": "dokodemo-door",
