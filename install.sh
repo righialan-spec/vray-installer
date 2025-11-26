@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # ================================================
 # Xray VLESS + xHttp + TLS + Proxy TIM/Azion 2025
-# =========================================
-# set -euo pipefail  
+# ================================================
+
+# --- CONFIGURAÇÃO DE SEGURANÇA DESATIVADA PARA EVITAR CRASH NO MENU ---
+# set -euo pipefail
 
 BREED="vray-installer-local"
 SNI_FIXED="www.tim.com.br"
@@ -33,7 +35,6 @@ require_root() {
 
 install_deps() {
   echo -e "${INFO} Instalando dependências...${RESET}"
-  # Tenta instalar sem parar o script em caso de erro leve
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y && apt-get install -y curl wget unzip ca-certificates openssl socat iptables jq
   elif command -v dnf >/dev/null 2>&1; then
@@ -57,7 +58,6 @@ install_xray() {
   if command -v xray >/dev/null 2>&1; then
       ok "Xray instalado"
   else
-      # Fallback manual
       curl -L -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
       unzip -o /tmp/xray.zip xray -d /tmp
       install -m 755 /tmp/xray /usr/local/bin/xray
@@ -111,19 +111,31 @@ open_ports() {
 
 create_menu_shortcut() {
   info "Criando atalho global 'menu'..."
+  
+  # Verificação se o script está rodando de um arquivo físico
+  if [[ ! -f "$0" ]]; then
+      echo -e "\e[31m[ERRO] Não foi possível criar o comando 'menu' automaticamente.\e[0m"
+      echo -e "\e[33mMOTIVO: O script foi executado diretamente da memória (pipe ou copy-paste).\e[0m"
+      echo -e "SOLUÇÃO: Salve este script em um arquivo (ex: install.sh) e execute: sudo bash install.sh"
+      return
+  fi
+
   local script_path
   script_path=$(readlink -f "$0")
   cp "$script_path" /usr/local/bin/menu
   chmod +x /usr/local/bin/menu
   
-  if ! grep -q "Para acessar o gerenciador" /root/.bashrc; then
-    cat >> /root/.bashrc <<EOF
+  # Limpa duplicatas no bashrc antes de adicionar
+  sed -i '/gerenciador do Xray/d' /root/.bashrc
+  sed -i '/Digite menu para/d' /root/.bashrc
+  sed -i '/=====/d' /root/.bashrc
+
+  cat >> /root/.bashrc <<EOF
 
 echo -e "\e[34m========================================================\e[0m"
 echo -e "\e[32m  >>> Digite \e[1mmenu\e[0m \e[32mpara acessar o gerenciador do Xray <<<\e[0m"
 echo -e "\e[34m========================================================\e[0m"
 EOF
-  fi
   ok "Comando 'menu' configurado!"
 }
 
@@ -137,7 +149,6 @@ init_user_db() {
 add_user() {
   local name="$1"
   local days="${2:-30}"
-  # Gera UUID robusto
   local uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
   if [[ ${#uuid} -ne 36 ]]; then uuid=$(uuidgen 2>/dev/null); fi
   
@@ -146,11 +157,9 @@ add_user() {
 
   init_user_db
 
-  # Remove anterior
   tmp=$(mktemp)
   jq --arg email "$email" 'del(.users[] | select(.email == $email))' "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
 
-  # Adiciona novo
   tmp=$(mktemp)
   jq --arg uuid "$uuid" --arg email "$email" --arg name "$name" --argjson expiry "$expiry" \
      '.users += [{uuid: $uuid, email: $email, name: $name, expiry: $expiry, enabled: true}]' \
@@ -199,7 +208,6 @@ update_xray_clients() {
   init_user_db
   local now=$(date +%s)
   
-  # Garante array válido []
   local active_users=$(jq -c --argjson now "$now" '[.users[] | select(.enabled and (.expiry == null or .expiry > $now)) | {id: .uuid, email: .email, level: 0}]' "$USER_DB" 2>/dev/null)
   [[ -z "$active_users" ]] && active_users="[]"
 
@@ -234,7 +242,7 @@ create_base_config() {
   cat > "$XRAY_CONFIG_PATH" <<EOF
 {
   "api": { "services": [ "HandlerService", "LoggerService", "StatsService" ], "tag": "api" },
-  "dns": { "servers": [ "94.140.14.14", "94.140.15.15" ] },
+  "dns": { "servers": [ "1.1.1.1", "8.8.8.8" ] },
   "inbounds": [
     {
       "tag": "api", "port": 1080, "protocol": "dokodemo-door",
@@ -301,12 +309,9 @@ show_menu() {
          read -p "Nome do usuário: " nome
          if [[ -z "$nome" ]]; then warn "Nome obrigatório"; read -p "Enter..."; continue; fi
          
-         # --- CORREÇÃO DE SEGURANÇA NA BUSCA DO UUID ---
-         # Usamos "|| echo" para garantir que o script não feche se o jq falhar
          uuid=$(jq -r --arg n "$nome" '.users[] | select(.name==$n) | .uuid' "$USER_DB" 2>/dev/null | head -n1 || echo "")
          
          if [[ -n "$uuid" ]]; then
-           # Busca domínio. Se falhar, usa um padrão.
            domain=$(openssl x509 -in "$SSL_DIR/fullchain.pem" -noout -subject 2>/dev/null | sed -n 's/^.*CN=\([^/]*\).*$/\1/p' || echo "")
            [[ -z "$domain" ]] && domain="seu.dominio.azion.app"
            
