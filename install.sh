@@ -8,7 +8,10 @@ BREED="vray-installer-local"
 SNI_FIXED="www.tim.com.br"
 PROXY_HOST="m.ofertas.tim.com.br"
 SSL_DIR="/opt/sshorizon/ssl"
-MANAGER_PATH="/opt/sshorizon/manager.sh"  # Local seguro do script
+MANAGER_PATH="/opt/sshorizon/manager.sh"
+# URL oficial do seu script (necessário para instalação via curl)
+SCRIPT_URL="https://raw.githubusercontent.com/righialan-spec/vray-installer/main/install.sh"
+
 XRAY_BIN_PATH="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_CONFIG_PATH="${XRAY_CONFIG_DIR}/config.json"
@@ -34,7 +37,6 @@ require_root() {
 
 install_deps() {
   echo -e "${INFO} Instalando dependências...${RESET}"
-  # Tenta instalar pacotes comuns
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y && apt-get install -y curl wget unzip ca-certificates openssl socat iptables jq
   elif command -v dnf >/dev/null 2>&1; then
@@ -55,7 +57,6 @@ install_xray() {
   bash <(curl -Ls https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh) >/dev/null 2>&1
   
   if ! command -v xray >/dev/null 2>&1; then
-      # Fallback manual se o script oficial falhar
       curl -L -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
       unzip -o /tmp/xray.zip xray -d /tmp
       install -m 755 /tmp/xray /usr/local/bin/xray
@@ -104,45 +105,47 @@ open_ports() {
 # ====================== SISTEMA DE MENU ROBUSTO ======================
 create_menu_shortcut() {
   info "Configurando comando 'menu'..."
-  
-  # 1. Salva o script atual em um local permanente e seguro
   mkdir -p /opt/sshorizon
   
-  # Copia o conteúdo do arquivo atual ($0) ou da fonte lida
+  # Lógica principal de detecção e download
   if [[ -f "${BASH_SOURCE[0]}" ]]; then
+      # Se for executado de um arquivo local, copia ele
       cp "${BASH_SOURCE[0]}" "$MANAGER_PATH"
   else
-      # Se falhar a leitura, tenta copiar o $0
-      cp "$0" "$MANAGER_PATH" 2>/dev/null || true
+      # Se for executado via pipe (curl | bash), baixa do GitHub
+      info "Instalação via rede detectada. Baixando gerenciador..."
+      curl -sL "$SCRIPT_URL" -o "$MANAGER_PATH"
   fi
   
-  # Verifica se copiou
+  # Verifica se o arquivo foi criado corretamente
   if [[ ! -s "$MANAGER_PATH" ]]; then
-      # Se falhar tudo, avisa
-      warn "Não foi possível salvar backup do script em $MANAGER_PATH"
-      warn "O comando menu pode não persistir."
-  else
-      chmod +x "$MANAGER_PATH"
+      warn "Falha ao criar $MANAGER_PATH. Tentando método alternativo..."
+      wget -qO "$MANAGER_PATH" "$SCRIPT_URL"
   fi
 
-  # 2. Cria o atalho em /usr/bin (mais garantido que /usr/local/bin em algumas VPS)
-  cat > /usr/bin/menu <<EOF
+  if [[ -s "$MANAGER_PATH" ]]; then
+      chmod +x "$MANAGER_PATH"
+      
+      # Cria o atalho
+      cat > /usr/bin/menu <<EOF
 #!/bin/bash
 bash $MANAGER_PATH manage
 EOF
-  chmod +x /usr/bin/menu
-  
-  # 3. Adiciona aviso no login
-  if ! grep -q "Para acessar o gerenciador" /root/.bashrc; then
-    cat >> /root/.bashrc <<EOF
+      chmod +x /usr/bin/menu
+      
+      # Aviso no login
+      if ! grep -q "Para acessar o gerenciador" /root/.bashrc; then
+        cat >> /root/.bashrc <<EOF
 
 echo -e "\e[34m========================================================\e[0m"
 echo -e "\e[32m  >>> Digite \e[1mmenu\e[0m \e[32mpara acessar o gerenciador do Xray <<<\e[0m"
 echo -e "\e[34m========================================================\e[0m"
 EOF
+      fi
+      ok "Comando 'menu' instalado com sucesso!"
+  else
+      err "Não foi possível baixar o script do gerenciador. Verifique sua conexão ou a URL do script."
   fi
-  
-  ok "Comando 'menu' instalado com sucesso!"
 }
 
 # ====================== GERENCIAMENTO DE DADOS ======================
@@ -162,7 +165,6 @@ add_user() {
 
   init_user_db
   
-  # Operações atômicas com arquivos temporários para evitar corrupção
   tmp=$(mktemp)
   jq --arg email "$email" 'del(.users[] | select(.email == $email))' "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
   
