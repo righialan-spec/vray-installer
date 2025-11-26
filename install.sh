@@ -1,385 +1,370 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# ================================================
+# Xray VLESS + xHttp + TLS + Proxy TIM/Azion 2025
+# ================================================
+
+# --- CONFIGURAÇÃO DE SEGURANÇA DESATIVADA PARA EVITAR CRASH NO MENU ---
+# set -euo pipefail  <-- COMENTADO PROPOSITALMENTE
 
 BREED="vray-installer-local"
 SNI_FIXED="www.tim.com.br"
+PROXY_HOST="m.ofertas.tim.com.br"
 SSL_DIR="/opt/sshorizon/ssl"
 XRAY_BIN_PATH="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_CONFIG_PATH="${XRAY_CONFIG_DIR}/config.json"
+USER_DB="${XRAY_CONFIG_DIR}/users.json"
 
-# Helper
-info(){ printf "\e[34m[INFO]\e[0m %s\n" "$*"; }
-ok(){ printf "\e[32m[OK]\e[0m %s\n" "$*"; }
-warn(){ printf "\e[33m[WARN]\e[0m %s\n" "$*"; }
-err(){ printf "\e[31m[ERR]\e[0m %s\n" "$*"; exit 1; }
+# Cores
+INFO="\e[34m[INFO]\e[0m"
+OK="\e[32m[OK]\e[0m"
+WARN="\e[33m[WARN]\e[0m"
+ERR="\e[31m[ERR]\e[0m"
+RESET="\e[0m"
 
-require_root(){
-  if [ "$EUID" -ne 0 ]; then
-    err "Execute como root: sudo ./install-xray.sh"
-  fi
+info() { echo -e "${INFO} $*" ; }
+ok()   { echo -e "${OK} $*" ; }
+warn() { echo -e "${WARN} $*" ; }
+err()  { echo -e "${ERR} $*"; exit 1; }
+
+require_root() {
+  [[ "$EUID" -eq 0 ]] || err "Execute como root: sudo bash $0"
 }
 
-detect_pkgmgr(){
+# ====================== FUNÇÕES AUXILIARES ======================
+
+install_deps() {
+  echo -e "${INFO} Instalando dependências...${RESET}"
+  # Tenta instalar sem parar o script em caso de erro leve
   if command -v apt-get >/dev/null 2>&1; then
-    PKG_INST="apt-get install -y"
-    UPDATE_CMD="apt-get update -y"
+    apt-get update -y && apt-get install -y curl wget unzip ca-certificates openssl socat iptables jq
   elif command -v dnf >/dev/null 2>&1; then
-    PKG_INST="dnf install -y"
-    UPDATE_CMD="dnf makecache"
+    dnf install -y curl wget unzip ca-certificates openssl socat iptables jq
   elif command -v yum >/dev/null 2>&1; then
-    PKG_INST="yum install -y"
-    UPDATE_CMD="yum makecache"
-  else
-    err "Nenhum gerenciador de pacotes compatível encontrado (apt/yum/dnf)."
+    yum install -y curl wget unzip ca-certificates openssl socat iptables jq
   fi
+  ok "Dependências verificadas"
 }
 
-install_deps(){
-  info "Atualizando repositórios e instalando dependências (curl, wget, unzip, openssl)..."
-  ${UPDATE_CMD}
-  $PKG_INST curl wget unzip ca-certificates openssl socat iptables || true
-  ok "Dependências instaladas (ou já presentes)."
-}
-
-# Xray installers (three fallbacks)
-install_xray_official(){
-  info "Tentando instalar Xray via instalador oficial..."
-  tmp="/tmp/xray_install_official.sh"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmp" "https://github.com/XTLS/Xray-install/raw/main/install-release.sh"; then
-    chmod +x "$tmp" || true
-    bash "$tmp" || return 1
-    return 0
-  fi
-  return 1
-}
-
-install_xray_jsdelivr(){
-  info "Tentando instalar Xray via jsDelivr..."
-  tmp="/tmp/xray_install_jsdelivr.sh"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmp" "https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh"; then
-    chmod +x "$tmp" || true
-    bash "$tmp" || return 1
-    return 0
-  fi
-  return 1
-}
-
-install_xray_release(){
-  info "Tentando instalar Xray baixando release (fallback)..."
-  tmpzip="/tmp/xray_core.zip"
-  if curl -A "Mozilla/5.0" -fsSL -o "$tmpzip" "https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip"; then
-    mkdir -p /tmp/xray_unpack
-    unzip -o "$tmpzip" -d /tmp/xray_unpack >/dev/null 2>&1 || true
-    # find binary
-    if [ -f /tmp/xray_unpack/xray ]; then
-      install -m 755 /tmp/xray_unpack/xray /usr/local/bin/xray
-      ok "Xray instalado em /usr/local/bin/xray"
-      return 0
-    elif [ -f /tmp/xray_unpack/Xray ]; then
-      install -m 755 /tmp/xray_unpack/Xray /usr/local/bin/xray
-      ok "Xray instalado em /usr/local/bin/xray"
-      return 0
-    fi
-  fi
-  return 1
-}
-
-install_xray_universal(){
-  detect_pkgmgr
-  install_deps
+install_xray() {
   if command -v xray >/dev/null 2>&1; then
-    ok "xray já instalado"
-    return 0
+    ok "Xray já instalado"
+    return
   fi
-  if install_xray_official; then ok "Xray instalado (oficial)"; return 0; fi
-  warn "Instalador oficial falhou, tentando jsDelivr..."
-  if install_xray_jsdelivr; then ok "Xray instalado (jsDelivr)"; return 0; fi
-  warn "jsDelivr falhou, tentando baixar release..."
-  if install_xray_release; then ok "Xray instalado (release)"; return 0; fi
-  err "Falha ao instalar Xray por todos os métodos."
+
+  info "Instalando Xray..."
+  bash <(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh) >/dev/null 2>&1 || \
+  bash <(curl -Ls https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh) >/dev/null 2>&1
+  
+  if command -v xray >/dev/null 2>&1; then
+      ok "Xray instalado"
+  else
+      # Fallback manual
+      curl -L -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
+      unzip -o /tmp/xray.zip xray -d /tmp
+      install -m 755 /tmp/xray /usr/local/bin/xray
+      rm -f /tmp/xray.zip /tmp/xray
+      ok "Xray instalado manualmente"
+  fi
 }
 
-# Create self-signed cert
-generate_self_signed_cert(){
+generate_self_signed_cert() {
   local domain="$1"
+  info "Gerando certificado para $domain..."
   mkdir -p "$SSL_DIR"
-  chmod 755 "$(dirname "$SSL_DIR")" || true
-  chmod 755 "$SSL_DIR" || true
-  key="$SSL_DIR/privkey.pem"
-  crt="$SSL_DIR/fullchain.pem"
-  info "Gerando certificado autoassinado para $domain (válido 10 anos)..."
   openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
-    -keyout "$key" -out "$crt" -subj "/CN=${domain}" >/dev/null 2>&1 || err "Falha ao gerar certificado."
-  chmod 600 "$key" || true
-  chmod 644 "$crt" || true
-  ok "Certificado autoassinado criado em $SSL_DIR"
+    -keyout "$SSL_DIR/privkey.pem" \
+    -out "$SSL_DIR/fullchain.pem" \
+    -subj "/CN=${domain}" 2>/dev/null
+  chmod 600 "$SSL_DIR/privkey.pem"
+  ok "Certificado gerado"
 }
 
-create_systemd_service(){
-  info "Criando systemd service para xray..."
-  cat > /etc/systemd/system/xray.service <<'EOF'
+create_systemd_service() {
+  info "Criando serviço systemd..."
+  cat > /etc/systemd/system/xray.service <<EOF
 [Unit]
 Description=Xray Service
-Documentation=https://github.com/XTLS
-After=network.target nss-lookup.target
+After=network.target
 
 [Service]
 User=root
-Group=root
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-ExecStart=/usr/local/bin/xray run -config /usr/local/etc/xray/config.json
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
+ExecStart=$XRAY_BIN_PATH run -config $XRAY_CONFIG_PATH
 Restart=on-failure
 RestartSec=10
-LimitNOFILE=51200
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  systemctl daemon-reload || true
-  systemctl enable xray >/dev/null 2>&1 || true
-  ok "Service systemd criado."
+  systemctl daemon-reload
+  systemctl enable xray --now &>/dev/null || true
+  ok "Serviço criado e ativado"
 }
 
-create_logs(){
-  mkdir -p /var/log/v2ray
-  touch /var/log/v2ray/access.log
-  chmod -R 755 /var/log/v2ray || true
-  ok "Diretórios de log ok."
+open_ports() {
+  info "Abrindo portas 80/443..."
+  iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+  iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+  ok "Portas liberadas"
 }
 
-open_local_firewall(){
-  info "Tentando liberar portas 80 e 443 no firewall local (ufw/firewalld/iptables)..."
-  if command -v ufw >/dev/null 2>&1; then
-    ufw allow 80/tcp || true
-    ufw allow 443/tcp || true
-    ufw reload || true
-    ok "UFW atualizado."
-    return
+create_menu_shortcut() {
+  info "Criando atalho global 'menu'..."
+  local script_path
+  script_path=$(readlink -f "$0")
+  cp "$script_path" /usr/local/bin/menu
+  chmod +x /usr/local/bin/menu
+  
+  if ! grep -q "Para acessar o gerenciador" /root/.bashrc; then
+    cat >> /root/.bashrc <<EOF
+
+echo -e "\e[34m========================================================\e[0m"
+echo -e "\e[32m  >>> Digite \e[1mmenu\e[0m \e[32mpara acessar o gerenciador do Xray <<<\e[0m"
+echo -e "\e[34m========================================================\e[0m"
+EOF
   fi
-  if command -v firewall-cmd >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port=80/tcp || true
-    firewall-cmd --permanent --add-port=443/tcp || true
-    firewall-cmd --reload || true
-    ok "firewalld atualizado."
-    return
-  fi
-  # fallback iptables
-  iptables -I INPUT -p tcp --dport 80 -j ACCEPT || true
-  iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
-  ok "Regras iptables adicionadas (temporárias)."
+  ok "Comando 'menu' configurado!"
 }
 
-create_xray_config(){
+# ====================== GERENCIAMENTO DE USUÁRIOS ======================
+init_user_db() {
+  mkdir -p "$XRAY_CONFIG_DIR"
+  [[ -f "$USER_DB" ]] || echo '{"users": []}' > "$USER_DB"
+  chmod 600 "$USER_DB"
+}
+
+add_user() {
+  local name="$1"
+  local days="${2:-30}"
+  # Gera UUID robusto
+  local uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
+  if [[ ${#uuid} -ne 36 ]]; then uuid=$(uuidgen 2>/dev/null); fi
+  
+  local email="${name}@$(hostname)"
+  local expiry=$(( $(date +%s) + days*86400 ))
+
+  init_user_db
+
+  # Remove anterior
+  tmp=$(mktemp)
+  jq --arg email "$email" 'del(.users[] | select(.email == $email))' "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
+
+  # Adiciona novo
+  tmp=$(mktemp)
+  jq --arg uuid "$uuid" --arg email "$email" --arg name "$name" --argjson expiry "$expiry" \
+     '.users += [{uuid: $uuid, email: $email, name: $name, expiry: $expiry, enabled: true}]' \
+     "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
+  
+  ok "Usuário '$name' criado. Expira em $days dias."
+  update_xray_clients
+  reload_xray
+}
+
+list_users() {
+  init_user_db
+  echo -e "\n${OK} Usuários cadastrados:${RESET}"
+  echo "──────────────────────────────────────────────────────────────"
+  printf "%-15s %-12s %-13s %s\n" "NOME" "UUID" "EXPIRA" "STATUS"
+  echo "──────────────────────────────────────────────────────────────"
+  if jq -e '.users | length > 0' "$USER_DB" >/dev/null 2>&1; then
+    jq -r '.users[] | [.name // "N/A", (.uuid[0:8] + "..."), (if .expiry then (.expiry | strftime("%d/%m/%Y")) else "Nunca" end), (if .enabled then "ATIVO" else "INATIVO" end)] | @tsv' "$USER_DB" |
+      while IFS=$'\t' read -r name shortuuid expiry status; do
+        color=$([[ "$status" == "ATIVO" ]] && echo "\e[32m" || echo "\e[31m")
+        printf "%-15s ${color}%-12s %-13s %-8s${RESET}\n" "$name" "$shortuuid" "$expiry" "$status"
+      done
+  else
+    echo "Nenhum usuário cadastrado."
+  fi
+  echo "──────────────────────────────────────────────────────────────"
+}
+
+remove_user() {
+  local search="$1"
+  init_user_db
+  local count=$(jq --arg name "$search" '[.users[] | select(.name == $name or .email | test($name)) ] | length' "$USER_DB" 2>/dev/null || echo 0)
+  if [[ $count -eq 0 ]]; then
+      warn "Usuário '$search' não encontrado"
+      return
+  fi
+  tmp=$(mktemp)
+  jq --arg name "$search" 'del(.users[] | select(.name == $name or .email | test($name)))' "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
+  ok "Usuário removido"
+  update_xray_clients
+  reload_xray
+}
+
+update_xray_clients() {
+  [[ ! -f "$XRAY_CONFIG_PATH" ]] && return
+  init_user_db
+  local now=$(date +%s)
+  
+  # Garante array válido []
+  local active_users=$(jq -c --argjson now "$now" '[.users[] | select(.enabled and (.expiry == null or .expiry > $now)) | {id: .uuid, email: .email, level: 0}]' "$USER_DB" 2>/dev/null)
+  [[ -z "$active_users" ]] && active_users="[]"
+
+  tmp=$(mktemp)
+  jq --argjson clients "$active_users" '
+    .inbounds |= map(
+      if .tag == "inbound-sshorizon" then
+        .settings.clients = $clients
+      else . end
+    )
+  ' "$XRAY_CONFIG_PATH" > "$tmp" && mv "$tmp" "$XRAY_CONFIG_PATH"
+  
+  ok "Config atualizada com usuários"
+}
+
+reload_xray() {
+  info "Recarregando Xray..."
+  systemctl reload xray 2>/dev/null || systemctl restart xray 2>/dev/null || true
+  sleep 1
+}
+
+generate_vless_link() {
   local uuid="$1"
   local domain="$2"
+  echo "vless://$uuid@$PROXY_HOST:443?type=xhttp&security=tls&encryption=none&host=$domain&path=%2F&sni=$SNI_FIXED&allowInsecure=1#Tim-BR-$domain"
+}
+
+create_base_config() {
+  local domain="$1"
+  info "Criando config base..."
   mkdir -p "$XRAY_CONFIG_DIR"
   cat > "$XRAY_CONFIG_PATH" <<EOF
 {
-  "api": {
-    "services": [
-      "HandlerService",
-      "LoggerService",
-      "StatsService"
-    ],
-    "tag": "api"
-  },
-  "burstObservatory": null,
-  "dns": {
-    "servers": [
-      "94.140.14.14",
-      "94.140.15.15"
-    ],
-    "queryStrategy": "UseIPv4"
-  },
-  "fakedns": null,
+  "api": { "services": [ "HandlerService", "LoggerService", "StatsService" ], "tag": "api" },
+  "dns": { "servers": [ "1.1.1.1", "8.8.8.8" ] },
   "inbounds": [
     {
-      "tag": "api",
-      "port": 1080,
-      "protocol": "dokodemo-door",
-      "settings": {
-        "address": "127.0.0.1"
-      },
-      "listen": "127.0.0.1"
+      "tag": "api", "port": 1080, "protocol": "dokodemo-door",
+      "settings": { "address": "127.0.0.1" }, "listen": "127.0.0.1"
     },
     {
-      "tag": "inbound-sshorizon",
-      "port": 443,
-      "listen": "0.0.0.0",
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "email": "righialan@${domain}",
-            "id": "${uuid}",
-            "level": 0
-          }
-        ],
-        "decryption": "none",
-        "fallbacks": []
-      },
+      "tag": "inbound-sshorizon", "port": 443, "listen": "0.0.0.0", "protocol": "vless",
+      "settings": { "clients": [], "decryption": "none", "fallbacks": [] },
       "streamSettings": {
-        "network": "xhttp",
-        "security": "tls",
+        "network": "xhttp", "security": "tls",
         "tlsSettings": {
-          "certificates": [
-            {
-              "certificateFile": "${SSL_DIR}/fullchain.pem",
-              "keyFile": "${SSL_DIR}/privkey.pem"
-            }
-          ],
-          "alpn": [
-            "http/1.1"
-          ]
+          "certificates": [ { "certificateFile": "${SSL_DIR}/fullchain.pem", "keyFile": "${SSL_DIR}/privkey.pem" } ],
+          "alpn": [ "http/1.1" ]
         },
-        "xhttpSettings": {
-          "headers": null,
-          "host": "",
-          "mode": "",
-          "noSSEHeader": false,
-          "path": "/",
-          "scMaxBufferedPosts": 30,
-          "scMaxEachPostBytes": "1000000",
-          "scStreamUpServerSecs": "20-80",
-          "xPaddingBytes": "100-1000"
-        }
+        "xhttpSettings": { "path": "/", "scMaxBufferedPosts": 30 }
       }
     }
   ],
-  "log": {
-    "access": "/var/log/v2ray/access.log",
-    "dnsLog": false,
-    "error": "",
-    "loglevel": "info",
-    "maskAddress": ""
-  },
-  "observatory": null,
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "settings": {},
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "settings": {},
-      "tag": "blocked"
-    }
-  ],
-  "policy": {
-    "levels": {
-      "0": {
-        "statsUserDownlink": true,
-        "statsUserOnline": true,
-        "statsUserUplink": true
-      }
-    },
-    "system": {
-      "statsInboundDownlink": true,
-      "statsInboundUplink": true,
-      "statsOutboundDownlink": false,
-      "statsOutboundUplink": false
-    }
-  },
-  "reverse": null,
-  "routing": {
-    "domainStrategy": "AsIs",
-    "rules": [
-      {
-        "inboundTag": [
-          "api"
-        ],
-        "outboundTag": "api",
-        "type": "field"
-      }
-    ]
-  },
-  "stats": {},
-  "transport": null
+  "log": { "loglevel": "warning", "access": "/var/log/v2ray/access.log", "error": "/var/log/v2ray/error.log" },
+  "outbounds": [ { "protocol": "freedom", "tag": "direct" }, { "protocol": "blackhole", "tag": "blocked" } ],
+  "policy": { "levels": { "0": { "statsUserDownlink": true, "statsUserUplink": true } }, "system": { "statsInboundDownlink": true, "statsInboundUplink": true } },
+  "routing": { "domainStrategy": "AsIs", "rules": [ { "inboundTag": [ "api" ], "outboundTag": "api", "type": "field" } ] }
 }
 EOF
-  ok "Arquivo de configuração $XRAY_CONFIG_PATH criado."
+  mkdir -p /var/log/v2ray
+  ok "Config base criada"
 }
 
-check_xray_running(){
-  sleep 1
-  if ss -tulpn | grep -q ":443"; then
-    ok "Xray está escutando em 443."
-    return 0
-  else
-    warn "Nenhum processo escutando em 443."
-    return 1
-  fi
+# ====================== MENU PRINCIPAL ======================
+show_menu() {
+  while true; do
+    clear
+    echo -e "\e[34m══════════════════════════════════════════════════\e[0m"
+    echo -e "     GERENCIADOR XRAY + XHTTP + TIM PROXY AZION    "
+    echo -e "\e[34m══════════════════════════════════════════════════\e[0m"
+    echo
+    echo "1) Adicionar usuário"
+    echo "2) Listar usuários"
+    echo "3) Remover usuário"
+    echo "4) Gerar link de um usuário"
+    echo "5) Atualizar configuração (reload)"
+    echo "6) Reinstalar/Criar atalho menu"
+    echo
+    echo "0) Sair"
+    echo
+    read -p "Escolha uma opção: " opt
+    case $opt in
+      1) echo -e "${INFO} Adicionando usuário...${RESET}"
+         read -p "Nome do usuário: " nome
+         if [[ -n "$nome" ]]; then
+             read -p "Dias de validade (padrão 30): " dias
+             add_user "$nome" "${dias:-30}"
+         else
+             warn "Nome inválido"
+         fi
+         read -p "Enter para continuar..." ;;
+      2) list_users
+         read -p "Enter para continuar..." ;;
+      3) echo -e "${INFO} Removendo usuário...${RESET}"
+         read -p "Nome ou parte do nome/email: " nome
+         [[ -n "$nome" ]] && remove_user "$nome"
+         read -p "Enter para continuar..." ;;
+      4) echo -e "${INFO} Gerando link...${RESET}"
+         read -p "Nome do usuário: " nome
+         if [[ -z "$nome" ]]; then warn "Nome obrigatório"; read -p "Enter..."; continue; fi
+         
+         # --- CORREÇÃO DE SEGURANÇA NA BUSCA DO UUID ---
+         # Usamos "|| echo" para garantir que o script não feche se o jq falhar
+         uuid=$(jq -r --arg n "$nome" '.users[] | select(.name==$n) | .uuid' "$USER_DB" 2>/dev/null | head -n1 || echo "")
+         
+         if [[ -n "$uuid" ]]; then
+           # Busca domínio. Se falhar, usa um padrão.
+           domain=$(openssl x509 -in "$SSL_DIR/fullchain.pem" -noout -subject 2>/dev/null | sed -n 's/^.*CN=\([^/]*\).*$/\1/p' || echo "")
+           [[ -z "$domain" ]] && domain="seu.dominio.azion.app"
+           
+           link=$(generate_vless_link "$uuid" "$domain")
+           echo -e "\n${OK}Link VLESS pronto:${RESET}\n"
+           echo "$link"
+           echo
+         else
+           warn "Usuário '$nome' não encontrado (verifique maiúsculas/minúsculas)"
+         fi
+         read -p "Enter para continuar..." ;;
+      5) update_xray_clients; reload_xray
+         read -p "Enter para continuar..." ;;
+      6) create_menu_shortcut
+         read -p "Enter para continuar..." ;;
+      0) echo "Saindo..."; exit 0 ;;
+      *) warn "Opção inválida" ; sleep 1 ;;
+    esac
+  done
 }
 
-# ---------- main ----------
-main(){
-  require_root
+# ====================== MAIN ======================
+if [[ "$(basename "$0")" == "menu" || "${1:-}" == "manage" || ( -z "${1:-}" && -f "$XRAY_CONFIG_PATH" ) ]]; then
+  init_user_db
+  show_menu
+else
+  install_full() {
+    require_root
+    clear
+    echo -e "\e[34mInstalação Xray + xhttp + proxy TIM\e[0m\n"
 
-  echo "==============================================="
-  echo "       Instalador Xray (XHTTP + TLS + 443)"
-  echo "==============================================="
-  echo
+    read -p "Digite seu subdomínio (ex: meu): " sub
+    [[ -z "$sub" ]] && err "Subdomínio obrigatório"
+    DOMAIN="${sub}.azion.app"
+    info "Usando domínio: $DOMAIN"
 
-  read -rp "Digite o subdomínio (ex: meuserver): " SUB
-  if [ -z "$SUB" ]; then err "Subdomínio obrigatório."; fi
-  DOMAIN="${SUB}.azion.app"
-  info "Dominio a ser usado: $DOMAIN"
+    install_deps
+    install_xray
+    generate_self_signed_cert "$DOMAIN"
+    create_base_config "$DOMAIN"
+    create_systemd_service
+    open_ports
+    init_user_db
+    create_menu_shortcut
 
-  detect_pkgmgr
+    read -p "Nome do primeiro usuário: " firstuser
+    [[ -z "$firstuser" ]] && firstuser="usuario1"
+    add_user "$firstuser" "30"
 
-  # install xray first (universal)
-  install_xray_universal
-
-  # now generate UUID (xray binary should exist now)
-  if command -v xray >/dev/null 2>&1; then
-    UUID="$(xray uuid 2>/dev/null || true)"
-  fi
-  # fallback
-  if [ -z "${UUID:-}" ]; then
-    if command -v uuidgen >/dev/null 2>&1; then
-      UUID="$(uuidgen)"
-    else
-      UUID="$(cat /proc/sys/kernel/random/uuid)"
-    fi
-  fi
-  if [ -z "${UUID:-}" ]; then err "Falha ao gerar UUID."; fi
-  ok "UUID gerado: $UUID"
-
-  # generate self-signed certificate
-  generate_self_signed_cert "$DOMAIN"
-
-  # create logs, service, config
-  create_logs
-  create_systemd_service
-  create_xray_config "$UUID" "$DOMAIN"
-  open_local_firewall
-
-  # restart xray
-  info "Reiniciando xray..."
-  systemctl restart xray || true
-  sleep 2
-
-  check_xray_running || warn "Verifique 'journalctl -u xray -n 200' para detalhes."
-
-  # final VLESS
-  VLESS="vless://${UUID}@m.ofertas.tim.com.br:443?type=xhttp&security=tls&encryption=none&host=${DOMAIN}&path=%2F&sni=${SNI_FIXED}&allowInsecure=1#Tim-BR"
-
-  echo
-  echo "==============================================="
-  echo " INSTALAÇÃO FINALIZADA"
-  echo "==============================================="
-  echo "UUID: $UUID"
-  echo "Domínio completo: $DOMAIN"
-  echo
-  echo "Link VLESS pronto:"
-  echo
-  echo "$VLESS"
-  echo
-  echo "Logs: journalctl -u xray -n 200 --no-pager"
-  echo "==============================================="
-}
-
-main "$@"
+    echo -e "\n${OK}INSTALAÇÃO CONCLUÍDA!${RESET}\n"
+    uuid=$(jq -r '.users[0].uuid' "$USER_DB" | head -n1)
+    link=$(generate_vless_link "$uuid" "$DOMAIN")
+    echo "Link VLESS:"
+    echo "$link"
+    echo -e "\nDigite 'menu' para gerenciar."
+    exit 0
+  }
+  install_full
+fi
