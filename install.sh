@@ -3,13 +3,12 @@
 # Xray VLESS + xHttp + TLS + Proxy TIM/Azion 2025
 # ================================================
 
-# --- CONFIGURAÇÃO DE SEGURANÇA DESATIVADA PARA EVITAR CRASH NO MENU ---
-# set -euo pipefail
-
+# Configurações de Pastas
 BREED="vray-installer-local"
 SNI_FIXED="www.tim.com.br"
 PROXY_HOST="m.ofertas.tim.com.br"
 SSL_DIR="/opt/sshorizon/ssl"
+MANAGER_PATH="/opt/sshorizon/manager.sh"  # Local seguro do script
 XRAY_BIN_PATH="/usr/local/bin/xray"
 XRAY_CONFIG_DIR="/usr/local/etc/xray"
 XRAY_CONFIG_PATH="${XRAY_CONFIG_DIR}/config.json"
@@ -31,10 +30,11 @@ require_root() {
   [[ "$EUID" -eq 0 ]] || err "Execute como root: sudo bash $0"
 }
 
-# ====================== FUNÇÕES AUXILIARES ======================
+# ====================== FUNÇÕES DE INSTALAÇÃO ======================
 
 install_deps() {
   echo -e "${INFO} Instalando dependências...${RESET}"
+  # Tenta instalar pacotes comuns
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update -y && apt-get install -y curl wget unzip ca-certificates openssl socat iptables jq
   elif command -v dnf >/dev/null 2>&1; then
@@ -50,20 +50,18 @@ install_xray() {
     ok "Xray já instalado"
     return
   fi
-
   info "Instalando Xray..."
   bash <(curl -Ls https://github.com/XTLS/Xray-install/raw/main/install-release.sh) >/dev/null 2>&1 || \
   bash <(curl -Ls https://cdn.jsdelivr.net/gh/XTLS/Xray-install/install-release.sh) >/dev/null 2>&1
   
-  if command -v xray >/dev/null 2>&1; then
-      ok "Xray instalado"
-  else
+  if ! command -v xray >/dev/null 2>&1; then
+      # Fallback manual se o script oficial falhar
       curl -L -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
       unzip -o /tmp/xray.zip xray -d /tmp
       install -m 755 /tmp/xray /usr/local/bin/xray
       rm -f /tmp/xray.zip /tmp/xray
-      ok "Xray instalado manualmente"
   fi
+  ok "Xray instalado"
 }
 
 generate_self_signed_cert() {
@@ -79,12 +77,10 @@ generate_self_signed_cert() {
 }
 
 create_systemd_service() {
-  info "Criando serviço systemd..."
   cat > /etc/systemd/system/xray.service <<EOF
 [Unit]
 Description=Xray Service
 After=network.target
-
 [Service]
 User=root
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE
@@ -93,53 +89,63 @@ ExecStart=$XRAY_BIN_PATH run -config $XRAY_CONFIG_PATH
 Restart=on-failure
 RestartSec=10
 LimitNOFILE=1048576
-
 [Install]
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable xray --now &>/dev/null || true
-  ok "Serviço criado e ativado"
 }
 
 open_ports() {
-  info "Abrindo portas 80/443..."
   iptables -I INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
   iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
-  ok "Portas liberadas"
 }
 
+# ====================== SISTEMA DE MENU ROBUSTO ======================
 create_menu_shortcut() {
-  info "Criando atalho global 'menu'..."
+  info "Configurando comando 'menu'..."
   
-  # Verificação se o script está rodando de um arquivo físico
-  if [[ ! -f "$0" ]]; then
-      echo -e "\e[31m[ERRO] Não foi possível criar o comando 'menu' automaticamente.\e[0m"
-      echo -e "\e[33mMOTIVO: O script foi executado diretamente da memória (pipe ou copy-paste).\e[0m"
-      echo -e "SOLUÇÃO: Salve este script em um arquivo (ex: install.sh) e execute: sudo bash install.sh"
-      return
+  # 1. Salva o script atual em um local permanente e seguro
+  mkdir -p /opt/sshorizon
+  
+  # Copia o conteúdo do arquivo atual ($0) ou da fonte lida
+  if [[ -f "${BASH_SOURCE[0]}" ]]; then
+      cp "${BASH_SOURCE[0]}" "$MANAGER_PATH"
+  else
+      # Se falhar a leitura, tenta copiar o $0
+      cp "$0" "$MANAGER_PATH" 2>/dev/null || true
+  fi
+  
+  # Verifica se copiou
+  if [[ ! -s "$MANAGER_PATH" ]]; then
+      # Se falhar tudo, avisa
+      warn "Não foi possível salvar backup do script em $MANAGER_PATH"
+      warn "O comando menu pode não persistir."
+  else
+      chmod +x "$MANAGER_PATH"
   fi
 
-  local script_path
-  script_path=$(readlink -f "$0")
-  cp "$script_path" /usr/local/bin/menu
-  chmod +x /usr/local/bin/menu
+  # 2. Cria o atalho em /usr/bin (mais garantido que /usr/local/bin em algumas VPS)
+  cat > /usr/bin/menu <<EOF
+#!/bin/bash
+bash $MANAGER_PATH manage
+EOF
+  chmod +x /usr/bin/menu
   
-  # Limpa duplicatas no bashrc antes de adicionar
-  sed -i '/gerenciador do Xray/d' /root/.bashrc
-  sed -i '/Digite menu para/d' /root/.bashrc
-  sed -i '/=====/d' /root/.bashrc
-
-  cat >> /root/.bashrc <<EOF
+  # 3. Adiciona aviso no login
+  if ! grep -q "Para acessar o gerenciador" /root/.bashrc; then
+    cat >> /root/.bashrc <<EOF
 
 echo -e "\e[34m========================================================\e[0m"
 echo -e "\e[32m  >>> Digite \e[1mmenu\e[0m \e[32mpara acessar o gerenciador do Xray <<<\e[0m"
 echo -e "\e[34m========================================================\e[0m"
 EOF
-  ok "Comando 'menu' configurado!"
+  fi
+  
+  ok "Comando 'menu' instalado com sucesso!"
 }
 
-# ====================== GERENCIAMENTO DE USUÁRIOS ======================
+# ====================== GERENCIAMENTO DE DADOS ======================
 init_user_db() {
   mkdir -p "$XRAY_CONFIG_DIR"
   [[ -f "$USER_DB" ]] || echo '{"users": []}' > "$USER_DB"
@@ -151,21 +157,21 @@ add_user() {
   local days="${2:-30}"
   local uuid="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || openssl rand -hex 16)"
   if [[ ${#uuid} -ne 36 ]]; then uuid=$(uuidgen 2>/dev/null); fi
-  
   local email="${name}@$(hostname)"
   local expiry=$(( $(date +%s) + days*86400 ))
 
   init_user_db
-
+  
+  # Operações atômicas com arquivos temporários para evitar corrupção
   tmp=$(mktemp)
   jq --arg email "$email" 'del(.users[] | select(.email == $email))' "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
-
+  
   tmp=$(mktemp)
   jq --arg uuid "$uuid" --arg email "$email" --arg name "$name" --argjson expiry "$expiry" \
      '.users += [{uuid: $uuid, email: $email, name: $name, expiry: $expiry, enabled: true}]' \
      "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
   
-  ok "Usuário '$name' criado. Expira em $days dias."
+  ok "Usuário '$name' criado."
   update_xray_clients
   reload_xray
 }
@@ -192,10 +198,8 @@ remove_user() {
   local search="$1"
   init_user_db
   local count=$(jq --arg name "$search" '[.users[] | select(.name == $name or .email | test($name)) ] | length' "$USER_DB" 2>/dev/null || echo 0)
-  if [[ $count -eq 0 ]]; then
-      warn "Usuário '$search' não encontrado"
-      return
-  fi
+  if [[ $count -eq 0 ]]; then warn "Usuário '$search' não encontrado"; return; fi
+  
   tmp=$(mktemp)
   jq --arg name "$search" 'del(.users[] | select(.name == $name or .email | test($name)))' "$USER_DB" > "$tmp" && mv "$tmp" "$USER_DB"
   ok "Usuário removido"
@@ -207,26 +211,18 @@ update_xray_clients() {
   [[ ! -f "$XRAY_CONFIG_PATH" ]] && return
   init_user_db
   local now=$(date +%s)
-  
   local active_users=$(jq -c --argjson now "$now" '[.users[] | select(.enabled and (.expiry == null or .expiry > $now)) | {id: .uuid, email: .email, level: 0}]' "$USER_DB" 2>/dev/null)
   [[ -z "$active_users" ]] && active_users="[]"
 
   tmp=$(mktemp)
   jq --argjson clients "$active_users" '
-    .inbounds |= map(
-      if .tag == "inbound-sshorizon" then
-        .settings.clients = $clients
-      else . end
-    )
+    .inbounds |= map(if .tag == "inbound-sshorizon" then .settings.clients = $clients else . end)
   ' "$XRAY_CONFIG_PATH" > "$tmp" && mv "$tmp" "$XRAY_CONFIG_PATH"
-  
-  ok "Config atualizada com usuários"
+  ok "Config atualizada"
 }
 
 reload_xray() {
-  info "Recarregando Xray..."
   systemctl reload xray 2>/dev/null || systemctl restart xray 2>/dev/null || true
-  sleep 1
 }
 
 generate_vless_link() {
@@ -237,7 +233,6 @@ generate_vless_link() {
 
 create_base_config() {
   local domain="$1"
-  info "Criando config base..."
   mkdir -p "$XRAY_CONFIG_DIR"
   cat > "$XRAY_CONFIG_PATH" <<EOF
 {
@@ -245,8 +240,7 @@ create_base_config() {
   "dns": { "servers": [ "1.1.1.1", "8.8.8.8" ] },
   "inbounds": [
     {
-      "tag": "api", "port": 1080, "protocol": "dokodemo-door",
-      "settings": { "address": "127.0.0.1" }, "listen": "127.0.0.1"
+      "tag": "api", "port": 1080, "protocol": "dokodemo-door", "settings": { "address": "127.0.0.1" }, "listen": "127.0.0.1"
     },
     {
       "tag": "inbound-sshorizon", "port": 443, "listen": "0.0.0.0", "protocol": "vless",
@@ -267,107 +261,77 @@ create_base_config() {
   "routing": { "domainStrategy": "AsIs", "rules": [ { "inboundTag": [ "api" ], "outboundTag": "api", "type": "field" } ] }
 }
 EOF
-  mkdir -p /var/log/v2ray
-  ok "Config base criada"
 }
 
-# ====================== MENU PRINCIPAL ======================
+# ====================== MENU ======================
 show_menu() {
   while true; do
     clear
     echo -e "\e[34m══════════════════════════════════════════════════\e[0m"
     echo -e "     GERENCIADOR XRAY + XHTTP + TIM PROXY AZION    "
     echo -e "\e[34m══════════════════════════════════════════════════\e[0m"
-    echo
     echo "1) Adicionar usuário"
     echo "2) Listar usuários"
     echo "3) Remover usuário"
-    echo "4) Gerar link de um usuário"
-    echo "5) Atualizar configuração (reload)"
-    echo "6) Reinstalar/Criar atalho menu"
-    echo
+    echo "4) Gerar link VLESS"
+    echo "5) Atualizar (Reload)"
+    echo "6) Recriar atalho 'menu'"
     echo "0) Sair"
     echo
-    read -p "Escolha uma opção: " opt
+    read -p "Opção: " opt
     case $opt in
-      1) echo -e "${INFO} Adicionando usuário...${RESET}"
-         read -p "Nome do usuário: " nome
-         if [[ -n "$nome" ]]; then
-             read -p "Dias de validade (padrão 30): " dias
-             add_user "$nome" "${dias:-30}"
-         else
-             warn "Nome inválido"
-         fi
-         read -p "Enter para continuar..." ;;
-      2) list_users
-         read -p "Enter para continuar..." ;;
-      3) echo -e "${INFO} Removendo usuário...${RESET}"
-         read -p "Nome ou parte do nome/email: " nome
-         [[ -n "$nome" ]] && remove_user "$nome"
-         read -p "Enter para continuar..." ;;
-      4) echo -e "${INFO} Gerando link...${RESET}"
-         read -p "Nome do usuário: " nome
-         if [[ -z "$nome" ]]; then warn "Nome obrigatório"; read -p "Enter..."; continue; fi
-         
-         uuid=$(jq -r --arg n "$nome" '.users[] | select(.name==$n) | .uuid' "$USER_DB" 2>/dev/null | head -n1 || echo "")
-         
+      1) read -p "Nome: " nome; [[ -n "$nome" ]] && read -p "Dias (30): " d && add_user "$nome" "${d:-30}"; read -p "Enter..." ;;
+      2) list_users; read -p "Enter..." ;;
+      3) read -p "Nome: " n; [[ -n "$n" ]] && remove_user "$n"; read -p "Enter..." ;;
+      4) read -p "Nome: " n
+         [[ -z "$n" ]] && { echo "Nome vazio"; read -p "Enter..."; continue; }
+         uuid=$(jq -r --arg n "$n" '.users[] | select(.name==$n) | .uuid' "$USER_DB" 2>/dev/null | head -n1 || echo "")
          if [[ -n "$uuid" ]]; then
            domain=$(openssl x509 -in "$SSL_DIR/fullchain.pem" -noout -subject 2>/dev/null | sed -n 's/^.*CN=\([^/]*\).*$/\1/p' || echo "")
            [[ -z "$domain" ]] && domain="seu.dominio.azion.app"
-           
-           link=$(generate_vless_link "$uuid" "$domain")
-           echo -e "\n${OK}Link VLESS pronto:${RESET}\n"
-           echo "$link"
+           echo -e "\n${OK} Link:\n"
+           generate_vless_link "$uuid" "$domain"
            echo
          else
-           warn "Usuário '$nome' não encontrado (verifique maiúsculas/minúsculas)"
+           warn "Não encontrado"
          fi
-         read -p "Enter para continuar..." ;;
-      5) update_xray_clients; reload_xray
-         read -p "Enter para continuar..." ;;
-      6) create_menu_shortcut
-         read -p "Enter para continuar..." ;;
-      0) echo "Saindo..."; exit 0 ;;
-      *) warn "Opção inválida" ; sleep 1 ;;
+         read -p "Enter..." ;;
+      5) update_xray_clients; reload_xray; read -p "Enter..." ;;
+      6) create_menu_shortcut; read -p "Enter..." ;;
+      0) exit 0 ;;
+      *) echo "Inválido"; sleep 1 ;;
     esac
   done
 }
 
-# ====================== MAIN ======================
-if [[ "$(basename "$0")" == "menu" || "${1:-}" == "manage" || ( -z "${1:-}" && -f "$XRAY_CONFIG_PATH" ) ]]; then
+# ====================== EXECUÇÃO ======================
+if [[ "$1" == "manage" ]]; then
   init_user_db
   show_menu
 else
-  install_full() {
-    require_root
-    clear
-    echo -e "\e[34mInstalação Xray + xhttp + proxy TIM\e[0m\n"
-
-    read -p "Digite seu subdomínio (ex: meu): " sub
-    [[ -z "$sub" ]] && err "Subdomínio obrigatório"
-    DOMAIN="${sub}.azion.app"
-    info "Usando domínio: $DOMAIN"
-
-    install_deps
-    install_xray
-    generate_self_signed_cert "$DOMAIN"
-    create_base_config "$DOMAIN"
-    create_systemd_service
-    open_ports
-    init_user_db
-    create_menu_shortcut
-
-    read -p "Nome do primeiro usuário: " firstuser
-    [[ -z "$firstuser" ]] && firstuser="usuario1"
-    add_user "$firstuser" "30"
-
-    echo -e "\n${OK}INSTALAÇÃO CONCLUÍDA!${RESET}\n"
-    uuid=$(jq -r '.users[0].uuid' "$USER_DB" | head -n1)
-    link=$(generate_vless_link "$uuid" "$DOMAIN")
-    echo "Link VLESS:"
-    echo "$link"
-    echo -e "\nDigite 'menu' para gerenciar."
-    exit 0
-  }
-  install_full
+  # Instalação
+  require_root
+  clear
+  echo -e "\e[34m>>> INSTALANDO... \e[0m"
+  
+  read -p "Subdomínio Azion (ex: meuapp): " sub
+  [[ -z "$sub" ]] && err "Necessário subdomínio"
+  DOMAIN="${sub}.azion.app"
+  
+  install_deps
+  install_xray
+  generate_self_signed_cert "$DOMAIN"
+  create_base_config "$DOMAIN"
+  create_systemd_service
+  open_ports
+  init_user_db
+  
+  # Cria o comando menu de forma segura
+  create_menu_shortcut
+  
+  # Usuário padrão
+  add_user "admin" "30"
+  
+  echo -e "\n${OK} Instalação finalizada!"
+  echo -e "Digite: \e[1;32mmenu\e[0m para gerenciar."
 fi
